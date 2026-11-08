@@ -4,7 +4,8 @@ const API = `http://localhost:${process.env.WIBER_PORT ?? 7777}`;
 
 export default defineConfig({
   server: {
-    port: 5173,
+    port: 5177,
+    strictPort: true,
     proxy: {
       "/api": API,
       "/project": API,

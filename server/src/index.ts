@@ -86,7 +86,7 @@ const server = Bun.serve({
     const index = Bun.file(join(WEB_DIST, "index.html"));
     return (await index.exists())
       ? new Response(index)
-      : new Response("Frontend not built. Run `bun run dev` and open http://localhost:5173", { status: 404 });
+      : new Response("Frontend not built. Run `bun run dev` and open http://localhost:5177", { status: 404 });
   },
   websocket: {
     open(ws) { ws.subscribe("all"); },

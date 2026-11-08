@@ -119,7 +119,7 @@ Rules:
 git submodule update --init         # vendor/kicanvas
 bun install
 bun run build:kicanvas              # builds vendor/kicanvas -> web/public/vendor/kicanvas.js (gitignored)
-WIBER_PROJECT=/path/to/kicad/project bun run dev   # server :7777 + vite :5173 → open http://localhost:5173
+WIBER_PROJECT=/path/to/kicad/project bun run dev   # server :7777 + vite :5177 → open http://localhost:5177
 bun run typecheck
 bun run build && bun run start /path/to/project    # prod: server also serves web/dist on :7777
 ```
