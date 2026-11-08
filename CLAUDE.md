@@ -142,6 +142,27 @@ Env vars: `WIBER_PROJECT` (or the first CLI arg to the server; defaults to `fixt
 - `fixtures/stickhub/` (USB hub, local 3D models, about 90 parts) and `fixtures/pic_programmer/` (hierarchical
   sheets): KiCad's own demo projects, from `share/kicad/demos` or gitlab kicad/code/kicad `demos/`.
 
+## UI
+
+The look borrows from enterprise EDA web viewers. The top bar has view tabs (Schematic | PCB | 3D). The left panel has
+Documents and Components (searchable). The right panel has Comments and Properties of the selection. A floating
+toolbar sits at the bottom (Fit, Zoom to selection, Comment mode, Toggle panel), and the PCB view has a layer bar
+(click focuses a layer, right-click shows or hides it). Comments appear as numbered pins on the canvas and follow
+the camera. Keys: `C` comment mode (click to drop a pin), `F` fit, `Z` zoom to selection, `1/2/3` views, `[` panel, `Esc`.
+
+### KiCanvas integration gotchas (verified)
+
+- Use `controls="basic"`. With `"none"`, KiCanvas **disables all interaction** (no pan, zoom or select).
+- The embed's `theme` attribute is **not** passed down to the viewers. Themes come from localStorage
+  `kc:prefs:theme` = `{"val":"kicad"}`, set before the bundle loads. `kc:prefs:alignControlsWithKiCad` makes the wheel zoom.
+- `kicanvas:select` is dispatched on the internal **viewer object, a plain EventTarget**. It never reaches
+  `document`, so listen on `app.viewer`. Get the viewer fresh every time, because KiCanvas replaces it after the first render.
+- Don't `remove()` KiCanvas internal elements, because that breaks its DisposableStack. Hide them with `style.display`.
+- PCB picks hitting both a footprint and a net go through `viewer.contextMenuCallback`. We override it to prefer the
+  footprint, and wrap `handleItemClick` to surface net clicks.
+- Picking uses the last `mousemove` position. Browser automation must dispatch `mousemove` before `click`
+  (see the JS snippets used during testing: `canvas.dispatchEvent(new MouseEvent("mousemove", …))`).
+
 ## API
 
 `GET /api/project` · `GET /project/<file>` (raw) · `GET /api/3d.glb` · `GET /api/review` ·
@@ -150,10 +171,9 @@ Env vars: `WIBER_PROJECT` (or the first CLI arg to the server; defaults to `fixt
 
 ## Roadmap / known gaps
 
-- Annotation overlay: rectangles and freehand ink in document mm, for both sch and pcb. This needs KiCanvas's
-  viewer camera/transform, which means hooking into `vendor/kicanvas/src/viewers/base/viewer.ts` rather than the
-  embed tag.
+- Annotation overlay: rectangles and freehand ink in document mm, for both sch and pcb. The transforms are
+  `KiCanvasView.worldToScreen/screenToWorld`, which the pins overlay already uses.
 - 2D snapshots. KiCanvas's canvas is inside shadow DOM without `preserveDrawingBuffer`.
-- Preserve pan and zoom across reloads. Show comment pins on the canvas. Click a comment to zoom to its anchor.
-- Net and pad selection. Today only symbols/footprints (refdes) and generic `at` points come from `kicanvas:select`.
+- Pad selection. Schematic net selection (PCB nets work).
+- KiCanvas's selection overlay is opaque in the "kicad" theme and hides the selected symbol. Tune `selection_color`.
 - Diff overlay: what changed since the `design_rev` of a comment.

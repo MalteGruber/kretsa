@@ -29,7 +29,7 @@ export async function mountThree(
   const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(devicePixelRatio);
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x16181d);
+  scene.background = new THREE.Color(0x2a2f38);
   scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 2));
   const sun = new THREE.DirectionalLight(0xffffff, 2);
   sun.position.set(1, 2, 1.5);
@@ -44,7 +44,7 @@ export async function mountThree(
   const size = box.getSize(new THREE.Vector3()).length() || 1;
   const center = box.getCenter(new THREE.Vector3());
   const camera = new THREE.PerspectiveCamera(35, 1, size / 1000, size * 100);
-  camera.position.copy(center).add(new THREE.Vector3(0, size * 0.9, size * 0.6));
+  camera.position.copy(center).add(new THREE.Vector3(0, size * 1.1, size * 0.8));
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.target.copy(center);
   controls.update();
