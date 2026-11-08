@@ -80,8 +80,10 @@ export function itemToComponent(item: any): Component | null {
 export class KiCanvasView {
   readonly embed: HTMLElement;
   private listenedViewer: any = null;
-  /** Called with the raw KiCanvas item (or null) when the user selects something. */
+  /** Called with the raw KiCanvas item (or null) when the *user* selects something. */
   onSelect: ((item: any) => void) | null = null;
+  /** >0 while we select programmatically (cross-probing, sheet switches): events are not user input. */
+  private quiet = 0;
 
   constructor(
     readonly host: HTMLElement,
@@ -129,7 +131,7 @@ export class KiCanvasView {
     // The viewer is a plain EventTarget (not a DOM node), so its events never reach `document`.
     if (v && v !== this.listenedViewer) {
       this.listenedViewer = v;
-      v.addEventListener("kicanvas:select", (e: CustomEvent) => this.onSelect?.(e.detail?.item ?? null));
+      v.addEventListener("kicanvas:select", (e: CustomEvent) => { if (!this.quiet) this.onSelect?.(e.detail?.item ?? null); });
       if (this.kind === "pcb") {
         // A click usually hits a footprint *and* a net; KiCanvas would pop a chooser menu.
         // Prefer the footprint (component selection), fall back to the net.
@@ -166,6 +168,35 @@ export class KiCanvasView {
       .map(itemToComponent)
       .filter((c): c is Component => !!c && !!c.ref && !c.ref.startsWith("#"))
       .sort((a, b) => a.ref.localeCompare(b.ref, undefined, { numeric: true }));
+  }
+
+  /**
+   * Cross-probe entry point: select a part by refdes, switching schematic sheet if needed.
+   * Returns false if the part doesn't exist in this document (e.g. schematic-only symbols on the PCB).
+   */
+  async selectRef(ref: string | null, zoom = false): Promise<boolean> {
+    this.quiet++;
+    try { return await this.selectRefInner(ref, zoom); } finally { this.quiet--; }
+  }
+
+  private async selectRefInner(ref: string | null, zoom: boolean): Promise<boolean> {
+    let v = this.viewer;
+    if (!v) return false;
+    if (!ref) { this.select(null); return true; }
+    const find = (vv: any) => this.kind === "sch" ? vv?.schematic?.find_symbol?.(ref) : vv?.board?.find_footprint?.(ref);
+    if (!find(v) && this.kind === "sch") {
+      const project = this.app?.project;
+      const page = project && [...project.pages()].find((pg: any) => pg.type === "schematic" && pg.document?.find_symbol?.(ref));
+      if (!page) { this.select(null); return false; }
+      project.set_active_page(page);
+      const t0 = performance.now();
+      while (performance.now() - t0 < 3000 && !find(this.viewer)) await new Promise((r) => setTimeout(r, 50));
+      v = this.viewer;
+    }
+    if (!find(v)) { this.select(null); return false; }
+    this.select(ref);
+    if (zoom) v.zoom_to_selection();
+    return true;
   }
 
   select(refOrUuid: string | null) {

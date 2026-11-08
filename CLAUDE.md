@@ -148,7 +148,12 @@ The look borrows from enterprise EDA web viewers. The top bar has view tabs (Sch
 Documents and Components (searchable). The right panel has Comments and Properties of the selection. A floating
 toolbar sits at the bottom (Fit, Zoom to selection, Comment mode, Toggle panel), and the PCB view has a layer bar
 (click focuses a layer, right-click shows or hides it). Comments appear as numbered pins on the canvas and follow
-the camera. Keys: `C` comment mode (click to drop a pin), `F` fit, `Z` zoom to selection, `1/2/3` views, `[` panel, `Esc`.
+the camera. Keys: `C` comment mode (click to drop a pin), `F` fit, `Z` zoom to selection, `1/2/3/4` views, `[` panel, `Esc`.
+
+**Cross-probing:** one selection, keyed by refdes, is shared by every pane (`state.selectedRef` in `main.ts`) and kept across
+view switches. The **Sch + PCB** mode (`#split`) runs two KiCanvas viewers side by side. Selecting in one selects and
+zooms in the other, switching schematic sheets if needed (`KiCanvasView.selectRef`). In 3D, the selected part is tinted and
+framed (`ThreeView.highlight`). Components-list clicks, comment cards and 3D picks all go through `selectRef()`.
 
 ### KiCanvas integration gotchas (verified)
 
@@ -160,6 +165,9 @@ the camera. Keys: `C` comment mode (click to drop a pin), `F` fit, `Z` zoom to s
 - Don't `remove()` KiCanvas internal elements, because that breaks its DisposableStack. Hide them with `style.display`.
 - PCB picks hitting both a footprint and a net go through `viewer.contextMenuCallback`. We override it to prefer the
   footprint, and wrap `handleItemClick` to surface net clicks.
+- KiCanvas's `@no_self_recursion` decorator uses **one flag per method shared by all viewer instances**. Calling
+  `otherViewer.select()` from inside a `kicanvas:select` handler is silently dropped, so defer it (`setTimeout`).
+  Programmatic selects are made "quiet" in `KiCanvasView` so they don't echo back as user selections.
 - Picking uses the last `mousemove` position. Browser automation must dispatch `mousemove` before `click`
   (see the JS snippets used during testing: `canvas.dispatchEvent(new MouseEvent("mousemove", …))`).
 

@@ -9,13 +9,19 @@ const REFDES = /^[A-Z]{1,4}\d+[A-Z]?$/;
 
 export interface ThreeView {
   snapshot(): string;
+  /** Tint the part with this refdes (null clears) and optionally frame the camera on it. */
+  highlight(ref: string | null, frame?: boolean): void;
+  /** Reset the camera to frame the whole board. */
+  fit(): void;
   dispose(): void;
 }
+
+const HIGHLIGHT = new THREE.Color(0xff7a1a);
 
 export async function mountThree(
   host: HTMLElement,
   rev: string,
-  onPick: (a: Anchor) => void,
+  onPick: (a: Anchor | null) => void,
 ): Promise<ThreeView | null> {
   host.innerHTML = `<div class="notice">Generating 3D model with kicad-cli…</div>`;
   const res = await fetch(`/api/3d.glb?rev=${rev}`);
@@ -48,6 +54,8 @@ export async function mountThree(
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.target.copy(center);
   controls.update();
+  const home = { pos: camera.position.clone(), target: controls.target.clone() };
+  const fit = () => { camera.position.copy(home.pos); controls.target.copy(home.target); controls.update(); };
 
   host.replaceChildren(renderer.domElement);
 
@@ -80,8 +88,42 @@ export async function mountThree(
       const name = o.name.split(/[\s_:]/)[0] ?? "";
       if (REFDES.test(name)) return onPick({ kind: "symbol", ref: name });
     }
-    if (hit) console.debug("3D pick: no refdes in node path", hit.object);
+    onPick(null);
   });
+
+  // kicad-cli names each part's GLB node by its bare refdes (verified on KiCad 10).
+  const nodesByRef = new Map<string, THREE.Object3D>();
+  model.traverse((o) => { if (REFDES.test(o.name) && !nodesByRef.has(o.name)) nodesByRef.set(o.name, o); });
+  let highlighted: THREE.Mesh[] = [];
+
+  const highlight = (ref: string | null, frame = false) => {
+    for (const m of highlighted) m.material = m.userData.origMaterial;
+    highlighted = [];
+    const node = ref ? nodesByRef.get(ref) : undefined;
+    if (!node) return;
+    node.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      m.userData.origMaterial ??= m.material;
+      const tint = (mat: THREE.Material) => {
+        const c = mat.clone() as THREE.MeshStandardMaterial;
+        if (c.emissive) { c.emissive = HIGHLIGHT.clone(); c.emissiveIntensity = 0.6; }
+        else if ((c as any).color) (c as any).color = HIGHLIGHT.clone();
+        return c;
+      };
+      m.material = Array.isArray(m.material) ? m.material.map(tint) : tint(m.material);
+      highlighted.push(m);
+    });
+    if (frame) {
+      const b = new THREE.Box3().setFromObject(node);
+      const c = b.getCenter(new THREE.Vector3());
+      const dist = Math.max(b.getSize(new THREE.Vector3()).length() * 4, size * 0.25);
+      const dir = camera.position.clone().sub(controls.target).normalize();
+      controls.target.copy(c);
+      camera.position.copy(c).add(dir.multiplyScalar(dist));
+      controls.update();
+    }
+  };
 
   let running = true;
   const loop = () => {
@@ -93,6 +135,8 @@ export async function mountThree(
 
   return {
     snapshot: () => renderer.domElement.toDataURL("image/png"),
+    highlight,
+    fit,
     dispose: () => {
       running = false;
       ro.disconnect();

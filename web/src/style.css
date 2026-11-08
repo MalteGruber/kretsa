@@ -87,19 +87,30 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .list .group:hover { background: none; }
 
 /* ---------- stage (canvas) ---------- */
+.stages { flex: 1; position: relative; min-width: 0; display: flex; }
 .stage { flex: 1; position: relative; min-width: 0; background: #f5f4ef; overflow: hidden; }
+.stage + .stage { border-left: 2px solid var(--border); }
+.stages.split .stage.focused::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 0 2px var(--accent); z-index: 6;
+}
+.pane-label {
+  position: absolute; top: 8px; left: 10px; z-index: 4; pointer-events: none; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); background: rgba(255,255,255,0.85);
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px;
+}
+.stages:not(.split) .pane-label { display: none; }
 .stage.dark { background: #001023; }
-#viewer { position: absolute; inset: 0; }
-#viewer > * { position: absolute; inset: 0; width: 100%; height: 100%; }
-#viewer kicanvas-embed { display: block; aspect-ratio: auto; }
-.stage.has-layerbar #viewer, .stage.has-layerbar #pins, .stage.has-layerbar #comment-catcher { bottom: 30px; }
+.viewer { position: absolute; inset: 0; }
+.viewer > * { position: absolute; inset: 0; width: 100%; height: 100%; }
+.viewer kicanvas-embed { display: block; aspect-ratio: auto; }
+.stage.has-layerbar .viewer, .stage.has-layerbar .pins, .stage.has-layerbar .catcher { bottom: 30px; }
 .notice {
   display: flex; align-items: center; justify-content: center; padding: 2rem; color: var(--muted);
   text-align: center; white-space: pre-wrap; font-family: ui-monospace, monospace;
 }
 .stage.dark .notice { color: #9aa4b2; }
 
-#pins { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.pins { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .pin {
   position: absolute; transform: translate(-50%, -100%); pointer-events: auto; cursor: pointer;
   min-width: 24px; height: 24px; padding: 0 6px; border-radius: 12px 12px 12px 2px;
@@ -111,15 +122,15 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .pin.open { background: var(--open); }
 .pin.active { background: var(--pin-active); z-index: 2; scale: 1.15; }
 .pin.draft { background: #fff; color: var(--pin-active); border-color: var(--pin-active); }
-#comment-catcher { position: absolute; inset: 0; cursor: crosshair; z-index: 3; }
-#comment-catcher[hidden] { display: none; }
+.catcher { position: absolute; inset: 0; cursor: crosshair; z-index: 3; }
+.catcher[hidden] { display: none; }
 
 .toolbar {
   position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 4;
   display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 8px;
   background: var(--panel); border: 1px solid var(--border); box-shadow: var(--shadow-lg);
 }
-.stage.has-layerbar .toolbar { bottom: 46px; }
+.stages.has-layerbar .toolbar { bottom: 46px; }
 .toolbar button {
   display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 8px; border: 0; border-radius: 6px;
   background: none; color: var(--fg);

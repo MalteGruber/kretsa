@@ -16,6 +16,7 @@
         <button data-view="sch">Schematic</button>
         <button data-view="pcb">PCB</button>
         <button data-view="3d">3D</button>
+        <button data-view="split" title="Schematic and PCB side by side, cross-probing">Sch + PCB</button>
       </nav>
       <div class="topright">
         <span id="status" class="status"></span>
@@ -39,10 +40,8 @@
         </div>
       </aside>
 
-      <section class="stage">
-        <div id="viewer"></div>
-        <div id="pins"></div>
-        <div id="comment-catcher" hidden></div>
+      <section class="stages" id="stages">
+        <!-- panes (.stage) are created by main.ts: one per view, two in split mode -->
         <div class="toolbar" id="toolbar">
           <button data-act="fit" title="Fit document (F)">
             <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
@@ -60,8 +59,6 @@
             <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1" /><path d="M9 4v16" /></svg>
           </button>
         </div>
-        <div id="coords" class="coords"></div>
-        <div id="layerbar" class="layerbar" hidden></div>
       </section>
 
       <aside id="right" class="panel right">
