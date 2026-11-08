@@ -124,6 +124,9 @@ bun run typecheck
 bun run build && bun run start /path/to/project    # prod: server also serves web/dist on :7777
 ```
 
+Both servers listen on all interfaces (LAN access: `http://<lan-ip>:5177`). **There is no auth**, so use trusted networks only.
+Set `WIBER_HOST=127.0.0.1` to keep the prod server local.
+
 Env vars: `WIBER_PROJECT` (or the first CLI arg to the server; defaults to `fixtures/stickhub`), `WIBER_PORT` (7777),
 `KICAD_CLI` (defaults to `kicad-cli` on PATH).
 

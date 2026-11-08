@@ -9,6 +9,8 @@ import { ReviewStore } from "./review";
 const ROOT = resolve(import.meta.dir, "../..");
 const PROJECT_DIR = resolve(process.argv[2] ?? process.env.WIBER_PROJECT ?? join(ROOT, "fixtures/stickhub"));
 const PORT = Number(process.env.WIBER_PORT ?? 7777);
+// 0.0.0.0 so the prod server is reachable on the LAN. No auth: trusted networks only.
+const HOST = process.env.WIBER_HOST ?? "0.0.0.0";
 const WEB_DIST = join(ROOT, "web/dist");
 
 if (!(await stat(PROJECT_DIR).then((s) => s.isDirectory(), () => false))) {
@@ -24,6 +26,7 @@ const json = (data: unknown, status = 200) => Response.json(data, { status });
 
 const server = Bun.serve({
   port: PORT,
+  hostname: HOST,
   async fetch(req, srv) {
     const url = new URL(req.url);
     const path = decodeURIComponent(url.pathname);
