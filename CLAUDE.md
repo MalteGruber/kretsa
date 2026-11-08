@@ -49,9 +49,19 @@ kicad-wiber/
 | Prior art: design review | KiCAD-Prism (Apache-2.0) | Self-hosted review platform. Comments are stored in SQLite, with export to `.comments/comments.json`. Worth reading before designing the review format. |
 | Prior art: visual diffs | KiRI, kidiff, plotgitsch | Useful later for a "what changed since the last review" overlay. |
 
-**Environment status**: `kicad-cli` is **not installed** on this machine yet. 3D export and any
-SVG/netlist generation depend on it (KiCad 9 or 10). The server should detect it and degrade
-gracefully, so 2D still works without it.
+**Environment**: KiCad **10.0.8** AppImage, extracted to `~/.local/opt/kicad-10.0.8/squashfs-root/`.
+`~/.local/bin/kicad-cli` and `~/.local/bin/kicad` are wrapper scripts around its `AppRun`. The bundled
+stock libraries are in `.../share/kicad/` (`3dmodels/`, `footprints/`, `symbols/`, `demos/`). The server
+detects kicad-cli and degrades gracefully without it, so 2D still works.
+
+**kicad-cli GLB export findings (verified on 10.0.8):**
+- The stock 3D library is shipped as **STEP only**, while many boards reference `….wrl`. `--subst-models`
+  does **not** fall back when the `.wrl` is missing. The fix in `server/src/kicad.ts` exports from a temp copy
+  with stock-library `.wrl` paths rewritten to `.step`, and passes `-D KIPRJMOD=<real project dir>`.
+- Legacy path vars (`KISYS3DMOD`, `KICAD6_3DMODEL_DIR`, …) already resolve to the bundled library.
+  `--define-var` only sets project text vars, and setting env vars changes nothing.
+- GLB node names are the bare refdes (`U2`, `J7`, …), so 3D click-to-pick by node name works. Mesh units are metres.
+- Export takes about 6 s for an approximately 90-part board (stickhub), so the cache matters.
 
 ## Review data format (`<project>/.wiber/review.json`)
 
@@ -114,7 +124,7 @@ bun run typecheck
 bun run build && bun run start /path/to/project    # prod: server also serves web/dist on :7777
 ```
 
-Env vars: `WIBER_PROJECT` (or the first CLI arg to the server; defaults to `fixtures/demo`), `WIBER_PORT` (7777),
+Env vars: `WIBER_PROJECT` (or the first CLI arg to the server; defaults to `fixtures/stickhub`), `WIBER_PORT` (7777),
 `KICAD_CLI` (defaults to `kicad-cli` on PATH).
 
 ## Code map
@@ -126,8 +136,8 @@ Env vars: `WIBER_PROJECT` (or the first CLI arg to the server; defaults to `fixt
 - `web/src/main.ts`: app state, tabs, comment panel. `kicanvas-view.ts` mounts `<kicanvas-embed>` and
   maps `kicanvas:select` events to anchors. `three-view.ts` is the three.js GLB viewer (lazy-loaded).
 - `docs/review-format.md`: instructions for the AI agent on consuming and updating review.json.
-- `fixtures/demo/`: KiCanvas example files (MIT). Sch and pcb are unrelated designs. Replace them with a real
-  project, for example one from KiCad's demos in `/usr/share/kicad/demos`.
+- `fixtures/stickhub/` (USB hub, local 3D models, about 90 parts) and `fixtures/pic_programmer/` (hierarchical
+  sheets): KiCad's own demo projects, from `share/kicad/demos` or gitlab kicad/code/kicad `demos/`.
 
 ## API
 
@@ -142,6 +152,5 @@ Env vars: `WIBER_PROJECT` (or the first CLI arg to the server; defaults to `fixt
   embed tag.
 - 2D snapshots. KiCanvas's canvas is inside shadow DOM without `preserveDrawingBuffer`.
 - Preserve pan and zoom across reloads. Show comment pins on the canvas. Click a comment to zoom to its anchor.
-- 3D picking assumes the GLB node names contain the refdes. Verify against real kicad-cli output.
 - Net and pad selection. Today only symbols/footprints (refdes) and generic `at` points come from `kicanvas:select`.
 - Diff overlay: what changed since the `design_rev` of a comment.

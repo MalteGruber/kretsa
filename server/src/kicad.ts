@@ -1,4 +1,4 @@
-import { mkdir, stat } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 const CLI = process.env.KICAD_CLI ?? "kicad-cli";
@@ -30,9 +30,20 @@ export function exportGlb(projectDir: string, pcbPath: string, pcbHash: string):
   return job;
 }
 
+// Matches stock-library model paths (KISYS3DMOD, KICAD6_3DMODEL_DIR, ... KICAD10_3DMODEL_DIR) ending in .wrl.
+const STOCK_WRL = /(\(model\s+"\$\{(?:KISYS3DMOD|KICAD\d+_3DMODEL_DIR)\}[^"]*)\.wrl"/g;
+
+/**
+ * Recent KiCad builds (e.g. the 10.x AppImage) ship the stock 3D library as STEP only, and kicad-cli's
+ * --subst-models does not fall back when the referenced .wrl is missing. So we export from a temp copy of
+ * the board with stock .wrl references rewritten to .step. KIPRJMOD is overridden to keep project-local
+ * model paths resolving against the real project dir. Project-local models are left untouched.
+ */
 async function runExport(projectDir: string, pcbPath: string, out: string): Promise<string> {
   if (await stat(out).then(() => true, () => false)) return out;
   await mkdir(dirname(out), { recursive: true });
+  const tmpPcb = out.replace(/\.glb$/, ".tmp.kicad_pcb");
+  await writeFile(tmpPcb, (await readFile(pcbPath, "utf8")).replace(STOCK_WRL, '$1.step"'));
   const args = [
     CLI, "pcb", "export", "glb",
     "--subst-models",
@@ -41,16 +52,24 @@ async function runExport(projectDir: string, pcbPath: string, out: string): Prom
     "--define-var", `KIPRJMOD=${projectDir}`,
     "--force",
     "-o", out,
-    pcbPath,
+    tmpPcb,
   ];
-  const p = Bun.spawn(args, { cwd: projectDir, stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(p.stdout).text(),
-    new Response(p.stderr).text(),
-    p.exited,
-  ]);
-  if (code !== 0 || !(await stat(out).then(() => true, () => false))) {
-    throw new Error(`kicad-cli glb export failed (exit ${code}):\n${stderr || stdout}`);
+  try {
+    const p = Bun.spawn(args, { cwd: projectDir, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(p.stdout).text(),
+      new Response(p.stderr).text(),
+      p.exited,
+    ]);
+    const missing = (stdout + stderr).match(/File not found: .*/g);
+    if (missing) console.warn(`[3d] ${missing.length} missing models, e.g. ${missing[0]}`);
+    if (code !== 0 || !(await stat(out).then(() => true, () => false))) {
+      throw new Error(`kicad-cli glb export failed (exit ${code}):\n${stderr || stdout}`);
+    }
+    return out;
+  } finally {
+    // kicad-cli also drops .kicad_prl (and sometimes .kicad_pro) next to the temp board
+    const base = tmpPcb.replace(/\.kicad_pcb$/, "");
+    await Promise.all(["kicad_pcb", "kicad_prl", "kicad_pro"].map((ext) => rm(`${base}.${ext}`, { force: true })));
   }
-  return out;
 }

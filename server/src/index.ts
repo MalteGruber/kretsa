@@ -7,7 +7,7 @@ import { safeJoin, scanProject } from "./project";
 import { ReviewStore } from "./review";
 
 const ROOT = resolve(import.meta.dir, "../..");
-const PROJECT_DIR = resolve(process.argv[2] ?? process.env.WIBER_PROJECT ?? join(ROOT, "fixtures/demo"));
+const PROJECT_DIR = resolve(process.argv[2] ?? process.env.WIBER_PROJECT ?? join(ROOT, "fixtures/stickhub"));
 const PORT = Number(process.env.WIBER_PORT ?? 7777);
 const WEB_DIST = join(ROOT, "web/dist");
 
