@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>kicad-wiber</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header>
+      <strong id="project-name">kicad-wiber</strong>
+      <nav id="tabs">
+        <button data-view="sch">Schematic</button>
+        <button data-view="pcb">PCB</button>
+        <button data-view="3d">3D</button>
+      </nav>
+      <span id="status"></span>
+    </header>
+    <main>
+      <section id="viewer"></section>
+      <aside id="comments">
+        <form id="new-comment">
+          <div id="anchors" class="chips"></div>
+          <textarea name="text" rows="3" placeholder="Comment for the AI… (select a part in the view to anchor it; Ctrl+Enter to send)"></textarea>
+          <div class="row">
+            <input name="extra" placeholder="extra anchors: U3, C12, net:VBUS, U3.4" />
+            <button type="submit">Add</button>
+          </div>
+        </form>
+        <div class="filter">
+          <label><input type="checkbox" id="show-closed" /> show resolved</label>
+        </div>
+        <ol id="comment-list"></ol>
+      </aside>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

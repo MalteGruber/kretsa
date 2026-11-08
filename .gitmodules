@@ -1,0 +1,3 @@
+[submodule "vendor/kicanvas"]
+	path = vendor/kicanvas
+	url = https://github.com/theacodes/kicanvas.git

@@ -1,0 +1,13 @@
+{
+  "name": "kicad-wiber",
+  "private": true,
+  "type": "module",
+  "workspaces": ["server", "web"],
+  "scripts": {
+    "dev": "bun run --filter '*' dev",
+    "build": "bun run --filter @wiber/web build",
+    "start": "bun run server/src/index.ts",
+    "typecheck": "bun run --filter '*' typecheck",
+    "build:kicanvas": "cd vendor/kicanvas && npm ci && node scripts/build.js && mkdir -p ../../web/public/vendor && cp build/kicanvas.js ../../web/public/vendor/kicanvas.js"
+  }
+}

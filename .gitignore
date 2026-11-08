@@ -1,0 +1,12 @@
+node_modules/
+dist/
+web/public/vendor/
+*.log
+.DS_Store
+# per-project review data lives next to the KiCad project; ignore it for fixtures
+fixtures/**/.wiber/
+# KiCad backups / locks
+*-backups/
+*.lck
+~*.lck
+fp-info-cache
