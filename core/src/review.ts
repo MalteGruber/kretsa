@@ -1,4 +1,4 @@
-import { watch } from "node:fs";
+import { readFileSync, watch, writeFileSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { isDraft, type Comment, type CommentPatch, type InkShape, type NewComment, type Review, type Status } from "../../shared/review";
@@ -71,6 +71,11 @@ export class ReviewStore {
     const now = new Date().toISOString();
     const human = p.reply?.author !== "ai" && (p.reply ? true : p.status === "open");
     if (p.reply?.author === "ai" && p.status === "resolved") throw new Error("the agent may not resolve comments; use addressed");
+    if (p.text !== undefined) {
+      if (!isDraft(c)) throw new Error("only drafts can be edited (this one was sent to the agent; reply instead)");
+      if (!p.text.trim()) throw new Error("text required");
+      c.text = p.text.trim();
+    }
     if (p.status) c.status = p.status;
     if (p.reply?.text) c.thread.push({ ...p.reply, at: now });
     if (human && (p.reply?.text || p.status === "open") && c.status !== "resolved" && c.status !== "wontfix") {
@@ -79,6 +84,17 @@ export class ReviewStore {
     }
     await this.save(r);
     return c;
+  }
+
+  /** Delete a draft (comments the agent has seen stay, so the thread history is kept). */
+  async remove(id: string): Promise<boolean> {
+    const r = await this.load();
+    const c = r.comments.find((c) => c.id === id);
+    if (!c) return false;
+    if (!isDraft(c)) throw new Error("only drafts can be deleted; resolve it instead");
+    r.comments = r.comments.filter((x) => x !== c);
+    await this.save(r);
+    return true;
   }
 
   /** "Send to AI": hand drafts to the agent (all of them, or `ids`). Returns the comments sent. */
@@ -106,8 +122,23 @@ export class ReviewStore {
 
   private get agentFile() { return join(this.dataDir, "agent.json"); }
 
-  async agentState(): Promise<{ seen?: string }> {
+  async agentState(): Promise<{ seen?: string; waiting?: { pid: number; since: string } }> {
     return readFile(this.agentFile, "utf8").then((s) => JSON.parse(s), () => ({}));
+  }
+
+  private async setAgentState(patch: { seen?: string; waiting?: { pid: number; since: string } | null }) {
+    const cur = await this.agentState();
+    const next: Record<string, unknown> = { ...cur, ...patch };
+    if (patch.waiting === null) delete next.waiting;
+    await atomicWrite(this.agentFile, JSON.stringify(next, null, 1) + "\n");
+  }
+
+  /** Is a `kretsa wait` blocked on this project (its process still alive)? */
+  async agentWaiting(): Promise<{ waiting: boolean; since?: string }> {
+    const w = (await this.agentState()).waiting;
+    if (!w) return { waiting: false };
+    try { process.kill(w.pid, 0); return { waiting: true, since: w.since }; }
+    catch { return { waiting: false }; }
   }
 
   /** Open comments the human sent after `seen` (what `kretsa wait` returns). */
@@ -126,13 +157,24 @@ export class ReviewStore {
     const deadline = opts.timeoutMs ? Date.now() + opts.timeoutMs : Infinity;
     let wake: (() => void) | null = null;
     const w = watch(this.dataDir, (_e, name) => { if (String(name).startsWith("review.json")) wake?.(); });
+    await this.setAgentState({ waiting: { pid: process.pid, since: new Date().toISOString() } });
+    // Killed while waiting (Ctrl+C, the agent stopping the background job): clear the flag synchronously.
+    const clear = () => {
+      try {
+        const { waiting: _, ...rest } = JSON.parse(readFileSync(this.agentFile, "utf8"));
+        writeFileSync(this.agentFile, JSON.stringify(rest, null, 1) + "\n");
+      } catch {}
+    };
+    const onSignal = () => { clear(); process.exit(130); };
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
     try {
       for (;;) {
         const got = await this.sentSince(seen);
         if (got.length) {
           const latest = got.map((c) => c.sent!).sort().at(-1)!;
           const prev = (await this.agentState()).seen;
-          if (!prev || latest > prev) await atomicWrite(this.agentFile, JSON.stringify({ seen: latest }, null, 1) + "\n");
+          if (!prev || latest > prev) await this.setAgentState({ seen: latest });
           return got;
         }
         const left = deadline - Date.now();
@@ -141,7 +183,12 @@ export class ReviewStore {
         await new Promise<void>((res) => { wake = res; setTimeout(res, Math.min(left, 2000)); });
         wake = null;
       }
-    } finally { w.close(); }
+    } finally {
+      w.close();
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      await this.setAgentState({ waiting: null }).catch(() => {});
+    }
   }
 }
 

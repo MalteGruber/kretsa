@@ -92,13 +92,22 @@ export type ServerMessage =
   | { type: "reload"; rev: string; changed: string[] }
   | { type: "review" }
   | { type: "project"; id: string } // the current project of the workspace changed
-  | { type: "lib" }; // a library file (symbol, footprint, 3D model, lib table) changed
+  | { type: "lib" } // a library file (symbol, footprint, 3D model, lib table) changed
+  | { type: "agent" }; // `kretsa wait` started or stopped
 
 export type NewComment = Omit<Comment, "id" | "status" | "design_rev" | "thread" | "created"> & {
   snapshotPng?: string; // data URL, server stores it to snap/<id>.png
 };
 
-export type CommentPatch = { status?: Status; reply?: Omit<ThreadEntry, "at"> };
+export type CommentPatch = {
+  status?: Status;
+  reply?: Omit<ThreadEntry, "at">;
+  /** Drafts only: replace the text. */
+  text?: string;
+};
+
+/** Is an agent blocked in `kretsa wait` for this project right now? (GET /api/agent) */
+export interface AgentStatus { waiting: boolean; since?: string }
 
 /** Body of POST /api/review/send: send these drafts (default: all drafts). */
 export type SendRequest = { ids?: string[] };

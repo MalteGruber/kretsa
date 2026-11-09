@@ -85,6 +85,9 @@
           <button data-act="left" title="Toggle panels ([)">
             <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="1" /><path d="M9 4v16" /></svg>
           </button>
+          <button data-act="help" title="Help and keyboard shortcuts (?)">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M9.5 9.5a2.5 2.5 0 015 0c0 2-2.5 2-2.5 4M12 17h.01" /></svg>
+          </button>
         </div>
       </section>
 
@@ -127,6 +130,39 @@
       </aside>
     </div>
     <div id="flash" class="flash" hidden></div>
+    <div id="help" class="overlay" hidden>
+      <div class="overlay-box help">
+        <div class="overlay-head"><h2>Using kretsa</h2><button id="help-close" class="iconbtn" title="Close (Esc)">✕</button></div>
+        <div class="helpbody">
+          <h3>Review loop</h3>
+          <ol>
+            <li>Select a part, net, track or pour, press <b>Comment</b> to drop a pin, or <b>Draw</b> boxes, arrows and marks.</li>
+            <li>Write the comment. <b>Send</b> posts it and sends it to the AI; <b>Draft</b> collects several to send together.</li>
+            <li>The agent picks them up with <code>kretsa wait</code> (the status bar shows whether it is listening), changes the design
+              and replies. Then <b>Resolve</b>, or reply to send it back. <b>What changed?</b> on a comment shows the agent's edits.</li>
+          </ol>
+          <h3>Library</h3>
+          <p>Comment on a part's symbol, footprint or 3D model (the tile's <b>Comment</b> button), click pin and pad rows to point at
+            them, or <b>Request a new part</b>. <b>KLC</b> adds KiCad Library Convention checks.</p>
+          <h3>Keyboard</h3>
+          <table class="keys">
+            <tr><td><kbd>1</kbd>–<kbd>5</kbd></td><td>Schematic, PCB, 3D, Sch + PCB, Library</td></tr>
+            <tr><td><kbd>C</kbd></td><td>Comment: click on the design to drop a pin</td></tr>
+            <tr><td><kbd>D</kbd></td><td>Draw (pen, box, arrow); <kbd>Ctrl</kbd>+<kbd>Z</kbd> undoes a stroke</td></tr>
+            <tr><td><kbd>F</kbd> / <kbd>Z</kbd></td><td>Fit / zoom to the selection</td></tr>
+            <tr><td><kbd>P</kbd></td><td>Projects</td></tr>
+            <tr><td><kbd>[</kbd></td><td>Toggle the left panel</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>Enter</kbd></td><td>Send the comment (<kbd>Shift</kbd> as well: save as draft)</td></tr>
+            <tr><td><kbd>Esc</kbd></td><td>Cancel the current tool, close overlays</td></tr>
+            <tr><td><kbd>?</kbd></td><td>This help</td></tr>
+          </table>
+          <h3>PCB layers</h3>
+          <p>Click a layer in the bar at the bottom to focus it; right-click (or long-press on touch) to show or hide it.</p>
+          <h3>Search</h3>
+          <p>The Components search also finds nets: pick one to highlight it everywhere.</p>
+        </div>
+      </div>
+    </div>
     <div id="projects" class="overlay" hidden>
       <div class="overlay-box">
         <div class="overlay-head"><h2>Projects</h2><span id="projects-root" class="muted"></span><button id="projects-close" class="iconbtn" title="Close (Esc)">✕</button></div>

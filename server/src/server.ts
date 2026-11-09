@@ -192,7 +192,16 @@ export async function startServer(opts: ServeOptions) {
         return json({ sent: sent.map((c) => c.id) });
       }
 
+      if (path === "/api/agent") return json(await review.agentWaiting());
+
       const m = path.match(/^\/api\/review\/comments\/([\w-]+)$/);
+      if (m && req.method === "DELETE") {
+        try {
+          if (!(await review.remove(m[1]!))) return json({ error: "not found" }, 404);
+        } catch (e) { return json({ error: (e as Error).message }, 400); }
+        broadcast({ type: "review" });
+        return json({ deleted: m[1] });
+      }
       if (m && req.method === "PATCH") {
         let c;
         try { c = await review.patch(m[1]!, (await req.json()) as CommentPatch); }
@@ -230,11 +239,13 @@ export async function startServer(opts: ServeOptions) {
   let timer: Timer | undefined;
   let reviewChanged = false;
   let libTimer: Timer | undefined;
+  let agentTimer: Timer | undefined;
   function watchProject() {
     projectWatcher?.close();
     projectWatcher = watchFs(projectDir, { recursive: true }, (_ev, name) => {
       if (!name) return;
       const n = name.toString();
+      if (n === ".kretsa/agent.json") { clearTimeout(agentTimer); agentTimer = setTimeout(() => broadcast({ type: "agent" }), 150); return; }
       if (n === ".kretsa/review.json") reviewChanged = true;
       else if (!n.startsWith(".kretsa/") && /(\.kicad_(sym|mod)|\.(step|stp|wrl)|-lib-table)$/i.test(n)) {
         clearTimeout(libTimer);

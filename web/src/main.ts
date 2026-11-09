@@ -74,6 +74,7 @@ const state = {
   /** "What changed since this comment": parts drawn as boxes on the canvas. */
   diff: null as { comment: string; data: DesignDiff } | null,
   diffs: new Map<string, DesignDiff | string>(),
+  agent: null as { waiting: boolean; since?: string } | null,
 };
 
 // =====================================================================================
@@ -168,11 +169,15 @@ async function showMode(mode: Mode, opts: { keepCamera?: boolean } = {}) {
       onSelection: () => renderDraftAnchors(),
     });
     renderDraftAnchors();
+    renderProps();
     return;
   }
 
   const kinds: View[] = mode === "split" ? ["sch", "pcb"] : [mode];
   state.panes = kinds.map(createPane);
+  const drawBtn = $<HTMLButtonElement>("#toolbar [data-act=draw]");
+  drawBtn.disabled = kinds.every((k) => k === "3d");
+  drawBtn.title = drawBtn.disabled ? "Drawing works on the schematic and PCB" : "Draw on the design (D)";
   renderDraftAnchors();
   stages.classList.toggle("split", mode === "split");
   stages.classList.toggle("has-layerbar", kinds.includes("pcb"));
@@ -946,7 +951,7 @@ function renderComment(c: Comment): HTMLLIElement {
     actions.appendChild(b);
   };
   const patch = async (p: Parameters<typeof api.patchComment>[1]) => { await api.patchComment(c.id, p); await refreshReview(); };
-  btn("Reply", () => {
+  if (!draft) btn("Reply", () => {
     if (li.querySelector(".replybox")) return;
     const box = document.createElement("div");
     box.className = "replybox";
@@ -958,14 +963,47 @@ function renderComment(c: Comment): HTMLLIElement {
     li.appendChild(box);
     input.focus();
   });
-  if (draft) btn("Send to AI", async () => { await api.send([c.id]); await refreshReview(); }, "send");
-  if (!closed) btn("Resolve", () => patch({ status: "resolved" }), "ok");
+  if (draft) {
+    btn("Send to AI", async () => { await api.send([c.id]); await refreshReview(); }, "send");
+    btn("Edit", () => {
+      if (li.querySelector(".editbox")) return;
+      const box = document.createElement("div");
+      box.className = "replybox editbox";
+      box.innerHTML = `<textarea rows="3"></textarea><button class="primary">Save</button>`;
+      const ta = $<HTMLTextAreaElement>("textarea", box);
+      ta.value = c.text;
+      const save = async () => { if (ta.value.trim() && ta.value.trim() !== c.text) await patch({ text: ta.value.trim() }); else box.remove(); };
+      $("button", box).onclick = save;
+      ta.onkeydown = (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) save(); if (e.key === "Escape") box.remove(); };
+      $(".ctext", li).after(box);
+      ta.focus();
+    });
+    btn("Delete", async () => {
+      if (b2confirm(li)) { await api.deleteComment(c.id); await refreshReview(); }
+    }, "danger");
+  }
+  if (!closed && !draft) btn("Resolve", () => patch({ status: "resolved" }), "ok");
   if (c.status !== "open") btn("Reopen", () => patch({ status: "open" }));
   return li;
 }
 
+/** Two-step delete without a modal dialog: the first click arms, the second (within 3 s) confirms. */
+function b2confirm(li: HTMLElement): boolean {
+  const b = [...li.querySelectorAll<HTMLButtonElement>(".cactions button.danger")][0];
+  if (!b) return true;
+  if (b.dataset.armed) return true;
+  b.dataset.armed = "1";
+  b.textContent = "Really delete?";
+  setTimeout(() => { delete b.dataset.armed; b.textContent = "Delete"; }, 3000);
+  return false;
+}
+
 function renderProps() {
   const host = $("#props");
+  if (state.mode === "lib") {
+    host.innerHTML = `<div class="empty">In the Library, part details are in the main view.<br/>Select parts in the list on the left.</div>`;
+    return;
+  }
   const s = state.selected;
   if (!s) {
     host.innerHTML = `<div class="empty">Select a component in the design<br/>to see its properties.</div>`;
@@ -1056,9 +1094,18 @@ function renderComponents() {
   const comps = (kind === "3d" ? state.comps.pcb ?? state.comps.sch ?? state.comps.server : state.comps[kind] ?? state.comps.server) ?? [];
   const items = comps.filter((c) => !q || `${c.ref} ${c.value} ${c.footprint}`.toLowerCase().includes(q));
   const list = $("#comp-list");
-  list.innerHTML = items.length
+  const nets = q && state.nets ? [...state.nets.byName.keys()].filter((n) => n.toLowerCase().includes(q)).slice(0, 40) : [];
+  list.innerHTML = (items.length
     ? items.map((c) => `<li data-ref="${esc(c.ref)}" class="${state.selectedRef === c.ref ? "active" : ""}"><span class="ref">${esc(c.ref)}</span><span class="val">${esc(c.value)}</span></li>`).join("")
-    : `<li class="group">${state.comps.server ? "No components" : "Loading components…"}</li>`;
+    : nets.length ? "" : `<li class="group">${state.comps.server ? "No components" : "Loading components…"}</li>`)
+    + (nets.length ? `<li class="group">Nets</li>` + nets.map((n) => `<li data-net="${esc(n)}" class="${state.selectedNet?.name === n ? "active" : ""}"><span class="ref">${esc(n)}</span><span class="val">${state.nets!.byName.get(n)!.length} pins</span></li>`).join("") : "");
+  $$<HTMLLIElement>("li[data-net]", list).forEach((li) => {
+    li.onclick = () => {
+      if (narrow()) { $("#left").hidden = true; syncPanelButtons(); }
+      const name = li.dataset.net!;
+      selectNet({ name, nodes: state.nets!.byName.get(name) ?? [] }, { zoom: true });
+    };
+  });
   $$<HTMLLIElement>("li[data-ref]", list).forEach((li) => {
     li.onclick = () => { if (narrow()) { $("#left").hidden = true; syncPanelButtons(); } selectRef(li.dataset.ref!, { zoom: true }); };
   });
@@ -1080,6 +1127,16 @@ function renderLayers(pane: Pane) {
   $$<HTMLButtonElement>("button", pane.layerbar).forEach((b) => {
     b.onclick = () => { pane.kc?.highlightLayer(b.dataset.layer!); renderLayers(pane); };
     b.oncontextmenu = (e) => { e.preventDefault(); pane.kc?.toggleLayer(b.dataset.layer!); renderLayers(pane); };
+    // Touch: long-press shows/hides (there is no right-click).
+    let timer: number | undefined, long = false;
+    b.onpointerdown = (e) => {
+      if (e.pointerType !== "touch") return;
+      long = false;
+      timer = window.setTimeout(() => { long = true; pane.kc?.toggleLayer(b.dataset.layer!); renderLayers(pane); }, 500);
+    };
+    b.onpointerup = b.onpointercancel = b.onpointerleave = () => clearTimeout(timer);
+    const click = b.onclick;
+    b.onclick = (e) => { if (long) { long = false; return; } click?.call(b, e); };
   });
 }
 
@@ -1093,11 +1150,31 @@ function renderStatus() {
     state.wsUp ? `<span class="live">● Live</span>` : `<span class="dead">● Offline</span>`,
     p ? `rev ${p.rev.slice(0, 7)}` : "",
     p?.kicadCli ? `KiCad ${esc(p.kicadCli)}` : "no kicad-cli",
-  ].filter(Boolean).join(" · ");
+  ].filter(Boolean).join(" · ") + agentBadge();
+  const sendTitle = state.agent?.waiting ? "Send your draft comments to the AI agent (it is waiting)"
+    : "Send your draft comments to the AI agent. It isn't running kretsa wait right now; it will see them the next time it does.";
+  $("#send-ai").title = sendTitle;
+}
+
+function agentBadge(): string {
+  if (!state.agent) return "";
+  return state.agent.waiting
+    ? ` · <span class="agent on" title="The agent is running kretsa wait${state.agent.since ? ` since ${esc(new Date(state.agent.since).toLocaleTimeString())}` : ""}: what you send reaches it right away">● AI listening</span>`
+    : ` · <span class="agent off" title="No agent is running kretsa wait for this project. Sent comments wait in review.json until it does.">○ AI not listening</span>`;
+}
+
+async function loadAgent() {
+  try { state.agent = await api.agent(); } catch { state.agent = null; }
+  renderStatus();
 }
 
 function bindUi() {
   $$("#tabs button").forEach((b) => (b.onclick = () => showMode(b.dataset.view as Mode)));
+  // Deep links and back/forward: #sch, #pcb, #3d, #split, #lib
+  addEventListener("hashchange", () => {
+    const m = location.hash.slice(1) as Mode;
+    if (MODES.includes(m) && m !== state.mode) showMode(m);
+  });
   $$("[data-ltab]").forEach((b) => (b.onclick = () => {
     $$("[data-ltab]").forEach((x) => x.classList.toggle("active", x === b));
     $$("[data-lpane]").forEach((p) => (p.hidden = p.dataset.lpane !== b.dataset.ltab));
@@ -1133,7 +1210,8 @@ function bindUi() {
     }
     if (a === "zoomsel" && state.selectedNet) pane?.kc?.selectNet(state.selectedNet, true);
     if (a === "comment") setCommentMode(!state.commentMode);
-    if (a === "draw") setInkTool(state.inkTool ? null : "pen");
+    if (a === "draw" && !$<HTMLButtonElement>("#toolbar [data-act=draw]").disabled) setInkTool(state.inkTool ? null : "pen");
+    if (a === "help") openHelp();
     if (a === "left") $("#left").hidden = !$("#left").hidden;
   };
   $$("#toolbar [data-act]").forEach((b) => (b.onclick = () => act(b.dataset.act!)));
@@ -1160,10 +1238,11 @@ function bindUi() {
     else if (k === "d") act("draw");
     else if (k === "f") act("fit");
     else if (k === "p") openProjects();
+    else if (e.key === "?") openHelp();
     else if (k === "z") act("zoomsel");
     else if (k === "[") act("left");
     else if (k >= "1" && k <= "5") showMode(MODES[Number(k) - 1]!);
-    else if (k === "escape") { closeProjects(); setCommentMode(false); setInkTool(null); state.checkMarker = null; state.activeComment = null; state.diff = null; renderComments(); }
+    else if (k === "escape") { closeProjects(); closeHelp(); setCommentMode(false); setInkTool(null); state.checkMarker = null; state.activeComment = null; state.diff = null; renderComments(); }
   });
 }
 
@@ -1220,12 +1299,17 @@ async function openProjects() {
 
 function closeProjects() { $("#projects").hidden = true; }
 
+function openHelp() { $("#help").hidden = false; }
+function closeHelp() { $("#help").hidden = true; }
+
 async function boot() {
   bindUi();
   bindNarrow();
   $("#projects-btn").onclick = openProjects;
   $("#project-name").onclick = openProjects;
   $("#projects-close").onclick = closeProjects;
+  $("#help-close").onclick = closeHelp;
+  $("#help").addEventListener("click", (e) => { if (e.target === $("#help")) closeHelp(); });
   $("#projects").addEventListener("click", (e) => { if (e.target === $("#projects")) closeProjects(); });
   try { state.project = await api.project(); }
   catch {
@@ -1244,6 +1328,7 @@ async function boot() {
       // Another project became current (picked here, in another browser, or by the agent): start over.
       if (msg.type === "project") return location.reload();
       if (msg.type === "lib") return void library?.refresh();
+      if (msg.type === "agent") return void loadAgent();
       if (msg.type !== "reload") return;
       state.project = await api.project();
       renderStatus();
@@ -1261,6 +1346,9 @@ async function boot() {
 
   requestAnimationFrame(updatePins);
   api.components().then((c) => { state.comps.server = c; renderComponents(); }, () => {});
+  loadAgent();
+  // A killed `kretsa wait` can't clear its flag; the server checks the pid, so re-ask now and then.
+  setInterval(() => { if (state.agent?.waiting) loadAgent(); }, 15000);
   await Promise.all([loadNetlist(), showMode(state.mode), refreshReview()]);
 }
 

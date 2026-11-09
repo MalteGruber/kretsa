@@ -210,7 +210,7 @@ Colors follow VS Code "Dark Modern" (CSS vars in `style.css`). The KiCanvas canv
 Documents and Components (searchable). The right panel has Comments, Properties of the selection, and Checks (ERC/DRC list; click to jump to the location, marked `!`). A floating
 toolbar sits at the bottom (Fit, Zoom to selection, Comment mode, Draw, Toggle panel), and the PCB view has a layer bar
 (click focuses a layer, right-click shows or hides it). Comments appear as numbered pins on the canvas and follow
-the camera. Keys: `C` comment mode (click to drop a pin), `D` draw, `F` fit, `Z` zoom to selection, `1/2/3/4` views, `[` panel, `Esc`.
+the camera. Keys: `C` comment mode (click to drop a pin), `D` draw, `F` fit, `Z` zoom to selection, `1`–`5` views (also `#sch`…`#lib` in the URL), `P` projects, `[` panel, `?` help overlay (also the toolbar's ? button), `Esc`.
 
 **Cross-probing:** one selection, keyed by refdes, is shared by every pane (`state.selectedRef` in `main.ts`) and kept across
 view switches. The **Sch + PCB** mode (`#split`) runs two KiCanvas viewers side by side. Selecting in one selects and
@@ -235,6 +235,10 @@ copies the canvas in the same task, because there is no preserveDrawingBuffer).
 pill and a Send button; the top bar's Send to AI button and the bar above the composer send all of them (`POST /api/review/send`).
 **What changed?**: comments whose `design_rev` differs from the current rev get a button that lists `/api/diff` and draws changed
 parts as dashed boxes on the canvas (`state.diff`, `diffMarkup`).
+Drafts can be edited (`PATCH {text}`, drafts only) and deleted (`DELETE /api/review/comments/:id`, drafts only; two-click
+confirm, no modal). The status bar shows whether an agent is in `kretsa wait` (`GET /api/agent`; `wait` writes its pid to
+`.kretsa/agent.json`, the server checks the pid is alive and broadcasts `{type:"agent"}`). The Components search also lists
+matching nets. Draw is disabled in 3D-only mode. PCB layers: long-press on touch toggles visibility.
 
 **Phone** (`max-width: 820px`): side panels become drawers (hamburger and comments button), split stacks vertically, toolbar
 icons only. KiCanvas supports touch pan and pinch natively. The draw catcher uses `touch-action: none`.
@@ -259,8 +263,8 @@ icons only. KiCanvas supports touch pan and pinch natively. The draw catcher use
 
 `GET /api/workspace` · `POST /api/workspace/current {id}` · `GET /api/project` · `GET /api/netlist` · `GET /api/check` · `GET /api/lib` · `GET /api/lib/part?id=` · `GET /api/lib/asset?id=&f=symbol_unitN.svg|footprint.svg|part.glb` · `GET /project/<file>` (raw) · `GET /api/3d.glb` · `GET /api/review` ·
 `POST /api/review/comments` · `PATCH /api/review/comments/:id` `{status?, reply?}` · `POST /api/review/send` `{ids?}` ·
-`GET /api/diff?since=<rev>` · `GET /api/components` · `?klc=1` on `/api/lib*` · `GET /kretsa/<path>` ·
-`WS /ws` → `{type:"reload", rev, changed[]}` | `{type:"review"}` | `{type:"project", id}` | `{type:"lib"}`
+`DELETE /api/review/comments/:id` · `GET /api/agent` · `GET /api/diff?since=<rev>` · `GET /api/components` · `?klc=1` on `/api/lib*` · `GET /kretsa/<path>` ·
+`WS /ws` → `{type:"reload", rev, changed[]}` | `{type:"review"}` | `{type:"project", id}` | `{type:"lib"}` | `{type:"agent"}`
 
 ## Roadmap / known gaps
 

@@ -201,7 +201,7 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .reply .body { flex: 1; min-width: 0; }
 .reply .ctext { margin: 2px 0 0; }
 .card img { display: block; max-width: calc(100% - 34px); margin: 8px 0 0 34px; border-radius: 4px; border: 1px solid var(--border); }
-.cactions { display: flex; gap: 6px; margin: 8px 0 0 34px; }
+.cactions { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0 34px; }
 .cactions button { background: none; border: 1px solid var(--border); border-radius: 5px; padding: 2px 10px; font-size: 12px; color: var(--fg); }
 .cactions button:hover { background: var(--panel-2); }
 .cactions button.ok { color: var(--resolved); border-color: #2ea04366; }
@@ -384,6 +384,18 @@ button.crumb:hover { color: var(--accent-fg); text-decoration: underline; }
 body.libmode #left, body.libmode #toggle-left { display: none; }
 
 /* ---------- send to AI ---------- */
+.agent.on { color: var(--resolved); }
+.agent.off { color: var(--muted); }
+.toolbar button:disabled { opacity: 0.35; cursor: not-allowed; }
+.cactions button.danger { color: var(--error); border-color: #f8514966; }
+.editbox textarea { flex: 1; border: 1px solid var(--border); border-radius: 2px; padding: 6px 8px; font: inherit; background: var(--input); color: var(--fg); }
+.help { max-width: 640px; }
+.helpbody { padding: 0 18px 18px; overflow: auto; max-height: 70vh; font-size: 13px; }
+.helpbody h3 { font-size: 13px; color: var(--fg-strong); margin: 14px 0 6px; }
+.helpbody ol { padding-left: 18px; margin: 0; }
+.helpbody li { margin-bottom: 4px; }
+.keys td { padding: 3px 12px 3px 0; vertical-align: top; }
+kbd { background: var(--panel-2); border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; font: 11px ui-monospace, monospace; }
 .sendbtn { display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 4px 10px; font-weight: 600; font-size: 12px; }
 .sendbtn:hover { background: var(--accent-hover); }
 .sendbtn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
@@ -425,3 +437,10 @@ body.libmode .composer .crow { justify-content: flex-end; }
 .droute { color: var(--muted); }
 .partissues li.info { border-left-color: var(--border-strong); color: var(--muted); }
 .liblist .libtoggle { margin-left: 6px; font-size: 12px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }
+@media (max-width: 820px) {
+  .logo { display: none; }
+  .crumbs #project-name { max-width: 20vw; overflow: hidden; text-overflow: ellipsis; display: block; }
+  .viewtabs button { padding: 0 6px; font-size: 13px; }
+  .sendbtn { padding: 4px 6px; gap: 3px; }
+  .topright { gap: 4px; }
+}
