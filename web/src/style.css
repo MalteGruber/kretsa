@@ -295,3 +295,25 @@ html, body { height: 100dvh; }
 @media (max-width: 820px) { .narrow-only { display: inline-flex; } }
 .viewtabs .short { display: none; }
 @media (max-width: 820px) { .viewtabs .short { display: inline; } .viewtabs .long { display: none; } }
+
+/* ---------- checks ---------- */
+.tcount { color: var(--error); font-weight: 700; margin-left: 2px; }
+.cfilter .libtoggle { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; margin-left: auto; }
+button.small { padding: 2px 10px; font-size: 12px; }
+.check-summary { padding: 8px 12px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
+.check-summary:empty { display: none; }
+.check-totals { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.check-err { color: var(--error); font-size: 12px; white-space: pre-wrap; }
+.check-summary .stale { margin: 0; }
+.checks { list-style: none; margin: 0; padding: 4px 0; overflow: auto; flex: 1; }
+.check { padding: 7px 12px; border-left: 3px solid transparent; cursor: pointer; border-bottom: 1px solid var(--border); }
+.check:hover { background: var(--panel-2); }
+.check.error { border-left-color: var(--error); }
+.check.warning { border-left-color: var(--open); }
+.check .chead { gap: 6px; font-size: 11px; color: var(--muted); }
+.check code { font: 11px ui-monospace, monospace; color: var(--fg); }
+.check .ctext { margin: 2px 0 0; font-size: 12px; }
+.check .citem { font-size: 11px; color: var(--muted); margin-top: 1px; }
+.sev { width: 8px; height: 8px; border-radius: 50%; background: var(--open); }
+.sev.error { background: var(--error); }
+.pin.check { background: var(--error); color: #fff; }

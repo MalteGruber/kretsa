@@ -2,7 +2,7 @@ import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Netlist, NetlistNet } from "../../shared/netlist";
 
-const CLI = process.env.KICAD_CLI ?? "kicad-cli";
+export const CLI = process.env.KICAD_CLI ?? "kicad-cli";
 
 /** Returns the kicad-cli version string, or null if it isn't installed. */
 export async function detectKicadCli(): Promise<string | null> {

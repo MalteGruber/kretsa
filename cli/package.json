@@ -1,0 +1,9 @@
+{
+  "name": "@kretsa/cli",
+  "private": true,
+  "type": "module",
+  "bin": { "kretsa": "src/main.ts" },
+  "scripts": { "typecheck": "tsc -p ." },
+  "dependencies": { "@kretsa/core": "workspace:*", "@kretsa/server": "workspace:*" },
+  "devDependencies": { "@types/bun": "latest", "typescript": "^5.9.0" }
+}

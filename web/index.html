@@ -88,6 +88,7 @@
         <div class="ptabs">
           <button data-rtab="comments" class="active">Comments</button>
           <button data-rtab="props">Properties</button>
+          <button data-rtab="checks">Checks <span id="check-count" class="tcount"></span></button>
         </div>
         <div class="pbody" data-rpane="comments">
           <div class="cfilter">
@@ -103,6 +104,16 @@
               <button type="submit" class="primary">Post</button>
             </div>
           </form>
+        </div>
+        <div class="pbody" data-rpane="checks" hidden>
+          <div class="cfilter">
+            <button data-cfilter="errors" class="active">Errors</button>
+            <button data-cfilter="all">All</button>
+            <label class="libtoggle"><input type="checkbox" id="check-lib" /> library</label>
+            <button id="check-run" class="secondary small" title="Re-run ERC + DRC">Run</button>
+          </div>
+          <div id="check-summary" class="check-summary"></div>
+          <ol id="check-list" class="checks"></ol>
         </div>
         <div class="pbody" data-rpane="props" hidden>
           <div id="props"></div>

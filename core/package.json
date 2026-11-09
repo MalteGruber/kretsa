@@ -1,0 +1,8 @@
+{
+  "name": "@kretsa/core",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": { "typecheck": "tsc -p ." },
+  "devDependencies": { "@types/bun": "latest", "typescript": "^5.9.0" }
+}

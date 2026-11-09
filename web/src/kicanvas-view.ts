@@ -40,7 +40,7 @@ export interface Component {
   props: [string, string][];
 }
 
-export interface Page { path: string; name: string; active: boolean }
+export interface Page { path: string; name: string; active: boolean; sheetPath?: string }
 export interface Layer { name: string; color: string; visible: boolean; highlighted: boolean }
 
 const colorCss = (c: any): string =>
@@ -527,7 +527,7 @@ export class KiCanvasView {
     const active = p.active_page?.project_path;
     return [...p.pages()]
       .filter((pg: any) => pg.type === (this.kind === "sch" ? "schematic" : "pcb"))
-      .map((pg: any) => ({ path: pg.project_path, name: pg.name || pg.filename, active: pg.project_path === active }));
+      .map((pg: any) => ({ path: pg.project_path, name: pg.name || pg.filename, active: pg.project_path === active, sheetPath: pg.sheet_path }));
   }
   setPage(path: string) { this.app?.project?.set_active_page(path); }
 

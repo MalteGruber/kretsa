@@ -4,6 +4,7 @@ import { api, connect } from "./api";
 import { itemToAnchor, itemToComponent, KiCanvasView, type Component } from "./kicanvas-view";
 import { NetIndex, type NetSel } from "./nets";
 import type { ThreeView } from "./three-view";
+import type { CheckReport, Violation } from "../../shared/check";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector<T>(sel)!;
 const $$ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => [...root.querySelectorAll<T>(sel)];
@@ -60,6 +61,12 @@ const state = {
   /** Stroke in progress (document mm). */
   liveInk: null as { kind: View; tool: Tool; pts: [number, number][] } | null,
   inkVersion: 0,
+  /** Latest ERC/DRC report (loaded when the Checks tab is first opened, refreshed on reload). */
+  check: null as CheckReport | null,
+  checkLoading: false,
+  checkFilter: "errors" as "errors" | "all",
+  /** Location of the violation the user clicked, shown as a marker. */
+  checkMarker: null as { kind: View; at: [number, number] } | null,
 };
 
 // =====================================================================================
@@ -514,6 +521,14 @@ function updatePanePins(pane: Pane) {
       el.title = c.text;
     }
   }
+  if (state.checkMarker?.kind === pane.kind) {
+    place("__check", state.checkMarker.at, () => {
+      const e = document.createElement("div");
+      e.className = "pin check";
+      e.textContent = "!";
+      return e;
+    });
+  }
   if (state.draftPoint?.kind === pane.kind) {
     place("__draft", state.draftPoint.at, () => {
       const e = document.createElement("div");
@@ -654,9 +669,76 @@ async function submitComment(form: HTMLFormElement) {
 // Right panel: comments + properties
 // =====================================================================================
 
-function showRightTab(tab: "comments" | "props") {
+function showRightTab(tab: RTab) {
+  if (tab === "checks" && !state.check && !state.checkLoading) loadCheck();
   $$("[data-rtab]").forEach((b) => b.classList.toggle("active", b.dataset.rtab === tab));
   $$("[data-rpane]").forEach((p) => (p.hidden = p.dataset.rpane !== tab));
+}
+
+type RTab = "comments" | "props" | "checks";
+
+// =====================================================================================
+// Checks (ERC + DRC via kicad-cli, same report the agent gets from `kretsa check`)
+// =====================================================================================
+
+async function loadCheck() {
+  state.checkLoading = true;
+  renderChecks();
+  try { state.check = await api.check(); }
+  catch (e) { state.check = { rev: "", at: "", kicad: null, ran: { erc: false, drc: false }, errors: [String(e)], violations: [] }; }
+  state.checkLoading = false;
+  renderChecks();
+}
+
+const SOURCE_LABEL: Record<Violation["source"], string> = { erc: "Schematic", drc: "PCB", unconnected: "Unrouted", parity: "Sch ↔ PCB" };
+
+function renderChecks() {
+  const r = state.check;
+  const lib = $<HTMLInputElement>("#check-lib").checked;
+  const all = (r?.violations ?? []).filter((v) => lib || !v.library);
+  const errors = all.filter((v) => v.severity === "error");
+  $("#check-count").textContent = r ? String(errors.length || "") : "";
+  const summary = $("#check-summary");
+  if (state.checkLoading) { summary.innerHTML = `<div class="empty">Running ERC + DRC…</div>`; $("#check-list").replaceChildren(); return; }
+  if (!r) { summary.innerHTML = ""; return; }
+  const by = (src: Violation["source"]) => all.filter((v) => v.source === src);
+  summary.innerHTML = `
+    ${r.errors.map((e) => `<div class="check-err">⚠ ${esc(e)}</div>`).join("")}
+    <div class="check-totals"><b>${errors.length}</b> errors · <b>${all.length - errors.length}</b> warnings
+      ${(["erc", "drc", "unconnected", "parity"] as const).map((s) => by(s).length ? `<span class="tag">${SOURCE_LABEL[s]} ${by(s).length}</span>` : "").join("")}</div>
+    ${r.rev && state.project && r.rev !== state.project.rev ? `<div class="stale">● design changed since this check: Run again</div>` : ""}`;
+  const shown = state.checkFilter === "errors" ? errors : all;
+  $("#check-list").replaceChildren(...shown.slice(0, 500).map((v) => {
+    const li = document.createElement("li");
+    li.className = `check ${v.severity}`;
+    li.innerHTML = `<div class="chead"><span class="sev ${v.severity}"></span><span class="src">${SOURCE_LABEL[v.source]}</span>
+      <code>${esc(v.type)}</code></div><div class="ctext">${esc(v.text)}</div>
+      ${v.items.map((i) => `<div class="citem">${esc(i.text)}</div>`).join("")}`;
+    li.onclick = () => gotoViolation(v);
+    return li;
+  }));
+}
+
+async function gotoViolation(v: Violation) {
+  const kind: View = v.source === "erc" ? "sch" : "pcb";
+  if (!paneOf(kind)) await showMode(state.mode === "split" ? "split" : kind);
+  const pane = paneOf(kind);
+  if (!pane?.kc) return;
+  setFocus(pane);
+  if (narrow()) { $("#right").hidden = true; syncPanelButtons(); }
+  if (kind === "sch" && v.sheet_uuid) {
+    const norm = (p?: string) => (p ?? "").replace(/\/$/, "");
+    const page = pane.kc.pages().find((p) => norm(p.sheetPath) === norm(v.sheet_uuid));
+    if (page && !page.active) { pane.kc.setPage(page.path); await pane.kc.waitViewer(); await new Promise((r) => setTimeout(r, 100)); }
+  }
+  const at = v.items.find((i) => i.at_mm)?.at_mm;
+  state.checkMarker = at ? { kind, at } : null;
+  if (at) {
+    const span = 12;
+    pane.kc.zoomToMm([at[0] - span, at[1] - span, at[0] + span, at[1] + span]);
+  }
+  const ref = v.items.find((i) => i.ref && !i.ref.startsWith("#"))?.ref;
+  if (ref) { state.selectedRef = ref; state.selected = enrich(ref); renderProps(); renderComponents(); await pane.kc.selectRef(ref, false); }
 }
 
 async function refreshReview() {
@@ -877,7 +959,14 @@ function bindUi() {
     $$("[data-ltab]").forEach((x) => x.classList.toggle("active", x === b));
     $$("[data-lpane]").forEach((p) => (p.hidden = p.dataset.lpane !== b.dataset.ltab));
   }));
-  $$("[data-rtab]").forEach((b) => (b.onclick = () => showRightTab(b.dataset.rtab as "comments" | "props")));
+  $$("[data-rtab]").forEach((b) => (b.onclick = () => showRightTab(b.dataset.rtab as RTab)));
+  $$("[data-cfilter]").forEach((b) => (b.onclick = () => {
+    state.checkFilter = b.dataset.cfilter as "errors" | "all";
+    $$("[data-cfilter]").forEach((x) => x.classList.toggle("active", x === b));
+    renderChecks();
+  }));
+  $("#check-lib").onchange = renderChecks;
+  $("#check-run").onclick = loadCheck;
   $$("[data-filter]").forEach((b) => (b.onclick = () => {
     state.filter = b.dataset.filter as "active" | "all";
     $$("[data-filter]").forEach((x) => x.classList.toggle("active", x === b));
@@ -927,7 +1016,7 @@ function bindUi() {
     else if (k === "z") act("zoomsel");
     else if (k === "[") act("left");
     else if (k >= "1" && k <= "4") showMode(MODES[Number(k) - 1]!);
-    else if (k === "escape") { setCommentMode(false); setInkTool(null); state.activeComment = null; renderComments(); }
+    else if (k === "escape") { setCommentMode(false); setInkTool(null); state.checkMarker = null; state.activeComment = null; renderComments(); }
   });
 }
 
@@ -967,6 +1056,7 @@ async function boot() {
       state.project = await api.project();
       renderStatus();
       await loadNetlist();
+      if (state.check) loadCheck();
       const kinds = new Set(state.panes.map((p) => (p.kind === "3d" ? "pcb" : p.kind)));
       const relevant = msg.changed.length === 0 ||
         state.project.files.some((f) => msg.changed.includes(f.path) && (kinds.has(f.kind as "sch" | "pcb") || f.kind === "pro"));

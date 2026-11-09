@@ -1,3 +1,4 @@
+import type { CheckReport } from "../../shared/check";
 import type { Netlist } from "../../shared/netlist";
 import type { Comment, CommentPatch, NewComment, ProjectInfo, Review, ServerMessage } from "../../shared/review";
 
@@ -15,6 +16,7 @@ export const api = {
   project: () => req<ProjectInfo>("GET", "/api/project"),
   review: () => req<Review>("GET", "/api/review"),
   netlist: () => req<Netlist>("GET", "/api/netlist"),
+  check: () => req<CheckReport>("GET", "/api/check"),
   addComment: (c: NewComment) => req<Comment>("POST", "/api/review/comments", c),
   patchComment: (id: string, p: CommentPatch) => req<Comment>("PATCH", `/api/review/comments/${id}`, p),
 };

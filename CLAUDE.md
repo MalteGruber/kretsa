@@ -18,23 +18,26 @@ Only the AI agent (or the human in KiCad) changes the design. The viewer's only 
 5. The agent reads `.kretsa/review.json`, makes the changes, and marks each comment `addressed` with a
    short note. The human then resolves it or reopens it.
 
-## Architecture (planned)
+## Architecture
 
 ```
 kretsa/
-  server/      Bun/TS: file watcher, kicad-cli runner, static + REST + WebSocket, review store
-  web/         Vite + TS frontend: tabs for Schematic | PCB | 3D, annotation layer, comment panel
-  vendor/      kicanvas (git submodule or fork). Do not edit in place without noting it here
-  docs/        review-format spec, decisions
+  shared/   contract types: review.ts (review.json), check.ts (ERC/DRC report), netlist.ts
+  core/     @kretsa/core: all project logic, no HTTP (scan, kicad-cli wrappers, review store, checks)
+  cli/      @kretsa/cli: the `kretsa` binary. Agent-facing (markdown out, --json), plus `kretsa serve`
+  server/   @kretsa/server: thin HTTP + WebSocket layer over core, exists only for the web UI (startServer())
+  web/      Vite + TS frontend: Schematic | PCB | 3D, comments, drawing, checks
+  vendor/   kicanvas (git submodule). Do not edit in place without noting it here
+  docs/     review-format spec (agent instructions)
 ```
 
-- **Runtime**: Bun is installed (`~/.local/bin/bun`), Node 22 is available via nvm. Use Bun for
-  the server and package management unless there is a reason not to.
-- **Server** responsibilities: `fs.watch` with debounce on the project dir. Run `kicad-cli` for
-  derived assets and cache them by file hash. Serve the raw KiCad files to the frontend. Push
-  `{type:"reload", files:[...]}` over WebSocket. Read and write `.kretsa/review.json`.
-- **Frontend** responsibilities: render sch and pcb in 2D, render 3D, and provide an overlay layer for
-  pins, rectangles, and freehand ink on all three views. Comment threads go in a side panel.
+- **Rule:** logic lives in `core/`. The CLI and the server are thin wrappers so they always give the same answers.
+  An MCP server, if added, is a third wrapper.
+- **The CLI works on project files directly.** The web server does not need to be running (except for `serve`). `review.json` is
+  the source of truth. The server watches it, so CLI writes appear live in the browser.
+- **Runtime**: Bun (`~/.local/bin/bun`), Node 22 via nvm. Use Bun for everything unless there is a reason not to.
+- The server watches the project dir (debounced), runs `kicad-cli` for derived assets cached by hash (GLB, netlist, checks),
+  serves the raw KiCad files, and pushes `{type:"reload"}` / `{type:"review"}` over WebSocket.
 
 ## Library scan (Nov 2026)
 
@@ -119,25 +122,37 @@ Rules:
 git submodule update --init         # vendor/kicanvas
 bun install
 bun run build:kicanvas              # builds vendor/kicanvas -> web/public/vendor/kicanvas.js (gitignored)
-KRETSA_PROJECT=/path/to/kicad/project bun run dev   # server :7777 + vite :5177 → open http://localhost:5177
+bun link                            # optional: puts `kretsa` on PATH (else: bun run kretsa <cmd> / bun cli/src/main.ts)
+
+kretsa serve [project]              # web viewer on :7777 (builds web/dist on first run), LAN-reachable
+KRETSA_PROJECT=/path bun run dev    # frontend dev: server :7777 + Vite HMR :5177 (no project: fixtures/stickhub)
+kretsa check [project]              # ERC + DRC + parity, markdown, new/fixed since last `kretsa check`
+kretsa status | review [project]    # summary / open comments as markdown
 bun run typecheck
-bun run build && bun run start /path/to/project    # prod: server also serves web/dist on :7777
 ```
 
-Both servers listen on all interfaces (LAN access: `http://<lan-ip>:5177`). **There is no auth**, so use trusted networks only.
-Set `KRETSA_HOST=127.0.0.1` to keep the prod server local.
+The project dir defaults to `$KRETSA_PROJECT`, else the nearest dir at or above cwd containing a `.kicad_pro`.
 
-Env vars: `KRETSA_PROJECT` (or the first CLI arg to the server; defaults to `fixtures/stickhub`), `KRETSA_PORT` (7777),
+Servers listen on all interfaces (LAN: `http://<lan-ip>:7777`, or `:5177` in dev). **There is no auth**, so use trusted networks only.
+`--host 127.0.0.1` / `KRETSA_HOST` keeps it local. Env vars: `KRETSA_PROJECT`, `KRETSA_PORT` (7777), `KRETSA_HOST`,
 `KICAD_CLI` (defaults to `kicad-cli` on PATH).
+
+**Checks** (`core/src/check.ts`): `kicad-cli sch erc` and `pcb drc --schematic-parity` (JSON, mm), normalized to `CheckReport`
+(sources: erc, drc, unconnected, parity). Library-lookup types (`lib_symbol_issues`, `footprint_link_issues`, …) are flagged
+`library` and hidden by default. They are noise until project libraries exist. Cached per rev in `.kretsa/check/<rev>.v<N>.json`.
+`kretsa check` diffs against `.kretsa/check/baseline.json` (its own previous full run) to show NEW and FIXED. kicad-cli
+creates a `.kicad_prl` next to its input; `runCli` deletes it if it wasn't there before.
 
 ## Code map
 
-- `shared/review.ts`: types shared by server and web. This is **the review contract**, so change it carefully.
-- `server/src/index.ts`: Bun.serve routes, WebSocket broadcast, project file watcher.
-  `project.ts` scans and hashes files. `kicad.ts` handles kicad-cli detection and GLB export, cached in `.kretsa/cache/<hash>.glb`.
-  `review.ts` holds the review store (atomic writes, REVIEW.md generation, snapshot PNGs).
-- `web/src/main.ts`: app state, tabs, comment panel. `kicanvas-view.ts` mounts `<kicanvas-embed>` and
-  maps `kicanvas:select` events to anchors. `three-view.ts` is the three.js GLB viewer (lazy-loaded).
+- `shared/review.ts`: **the review contract** (review.json), so change it carefully. `shared/check.ts`, `shared/netlist.ts`.
+- `core/src/`: `project.ts` (scan + hash, `findProjectDir`, `rootSchematic`/`mainPcb`, `.wiber`→`.kretsa` migration),
+  `kicad.ts` (kicad-cli detection, GLB export cached in `.kretsa/cache/<hash>.glb`, netlist), `review.ts` (review store:
+  atomic writes, REVIEW.md, snapshot PNGs, ink SVG), `check.ts` (ERC/DRC, diff, markdown).
+- `cli/src/main.ts`: `kretsa` commands. `server/src/server.ts`: `startServer()` with routes, WebSocket and watcher.
+- `web/src/main.ts`: app state, panes, selection and cross-probing, comments, drawing, checks tab.
+  `kicanvas-view.ts` wraps KiCanvas (picking, nets, camera, capture). `nets.ts` holds schematic connectivity. `ink.ts` holds drawing.
+  `kicad-theme.ts` holds canvas colors. `three-view.ts` is the GLB viewer (lazy-loaded).
 - `docs/review-format.md`: instructions for the AI agent on consuming and updating review.json.
 - `fixtures/stickhub/` (USB hub, local 3D models, about 90 parts) and `fixtures/pic_programmer/` (hierarchical
   sheets): KiCad's own demo projects, from `share/kicad/demos` or gitlab kicad/code/kicad `demos/`.
@@ -146,7 +161,7 @@ Env vars: `KRETSA_PROJECT` (or the first CLI arg to the server; defaults to `fix
 
 Colors follow VS Code "Dark Modern" (CSS vars in `style.css`). The KiCanvas canvases are recolored at runtime by
 `kicad-theme.ts`, because KiCanvas has no theme API: it mutates its shared Color objects, then calls `paint()`. Layout borrows from enterprise EDA web viewers. The top bar has view tabs (Schematic | PCB | 3D). The left panel has
-Documents and Components (searchable). The right panel has Comments and Properties of the selection. A floating
+Documents and Components (searchable). The right panel has Comments, Properties of the selection, and Checks (ERC/DRC list; click to jump to the location, marked `!`). A floating
 toolbar sits at the bottom (Fit, Zoom to selection, Comment mode, Toggle panel), and the PCB view has a layer bar
 (click focuses a layer, right-click shows or hides it). Comments appear as numbered pins on the canvas and follow
 the camera. Keys: `C` comment mode (click to drop a pin), `D` draw, `F` fit, `Z` zoom to selection, `1/2/3/4` views, `[` panel, `Esc`.
@@ -191,7 +206,7 @@ icons only. KiCanvas supports touch pan and pinch natively. The draw catcher use
 
 ## API
 
-`GET /api/project` · `GET /api/netlist` · `GET /project/<file>` (raw) · `GET /api/3d.glb` · `GET /api/review` ·
+`GET /api/project` · `GET /api/netlist` · `GET /api/check` · `GET /project/<file>` (raw) · `GET /api/3d.glb` · `GET /api/review` ·
 `POST /api/review/comments` · `PATCH /api/review/comments/:id` `{status?, reply?}` · `GET /kretsa/<path>` ·
 `WS /ws` → `{type:"reload", rev, changed[]}` | `{type:"review"}`
 
