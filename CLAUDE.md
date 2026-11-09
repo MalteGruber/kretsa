@@ -144,11 +144,12 @@ Env vars: `WIBER_PROJECT` (or the first CLI arg to the server; defaults to `fixt
 
 ## UI
 
-The look borrows from enterprise EDA web viewers. The top bar has view tabs (Schematic | PCB | 3D). The left panel has
+Colors follow VS Code "Dark Modern" (CSS vars in `style.css`). The KiCanvas canvases are recolored at runtime by
+`kicad-theme.ts`, because KiCanvas has no theme API: it mutates its shared Color objects, then calls `paint()`. Layout borrows from enterprise EDA web viewers. The top bar has view tabs (Schematic | PCB | 3D). The left panel has
 Documents and Components (searchable). The right panel has Comments and Properties of the selection. A floating
 toolbar sits at the bottom (Fit, Zoom to selection, Comment mode, Toggle panel), and the PCB view has a layer bar
 (click focuses a layer, right-click shows or hides it). Comments appear as numbered pins on the canvas and follow
-the camera. Keys: `C` comment mode (click to drop a pin), `F` fit, `Z` zoom to selection, `1/2/3/4` views, `[` panel, `Esc`.
+the camera. Keys: `C` comment mode (click to drop a pin), `D` draw, `F` fit, `Z` zoom to selection, `1/2/3/4` views, `[` panel, `Esc`.
 
 **Cross-probing:** one selection, keyed by refdes, is shared by every pane (`state.selectedRef` in `main.ts`) and kept across
 view switches. The **Sch + PCB** mode (`#split`) runs two KiCanvas viewers side by side. Selecting in one selects and
@@ -162,6 +163,15 @@ group from the kicad-cli netlist (`GET /api/netlist`) by pin votes. Nets are mat
 already-selected footprint selects that pad's net. Sch highlight is an SVG overlay (`svg.netlayer`). PCB uses KiCanvas' native
 `highlight_net`, which shares the overlay layer with the selection box. 3D tints every part on the net. We replace `viewer.on_pick`
 on both viewers. Pads are not in KiCanvas' bbox index, so they are hit-tested by geometry (`padAt`).
+
+**Drawing** (`ink.ts`, `bindInk` in `main.ts`): pen, box and arrow strokes on sch/pcb, stored in document mm. On post, each shape is
+summarized into `ink_shapes`: `covers` = parts enclosed by a box or loop, or touched by an open stroke; arrows get `from_ref`/`to_ref`.
+Referenced parts and an overall `area` are added as anchors. The server writes `ink/<id>.svg` and describes the shapes in
+REVIEW.md. A cropped PNG with the ink burned in becomes the snapshot (`KiCanvasView.capture()` renders WebGL synchronously and
+copies the canvas in the same task, because there is no preserveDrawingBuffer).
+
+**Phone** (`max-width: 820px`): side panels become drawers (hamburger and comments button), split stacks vertically, toolbar
+icons only. KiCanvas supports touch pan and pinch natively. The draw catcher uses `touch-action: none`.
 
 ### KiCanvas integration gotchas (verified)
 
@@ -187,8 +197,4 @@ on both viewers. Pads are not in KiCanvas' bbox index, so they are hit-tested by
 
 ## Roadmap / known gaps
 
-- Annotation overlay: rectangles and freehand ink in document mm, for both sch and pcb. The transforms are
-  `KiCanvasView.worldToScreen/screenToWorld`, which the pins overlay already uses.
-- 2D snapshots. KiCanvas's canvas is inside shadow DOM without `preserveDrawingBuffer`.
-- KiCanvas's selection overlay is opaque in the "kicad" theme and hides the selected symbol. Tune `selection_color`.
 - Diff overlay: what changed since the `design_rev` of a comment.

@@ -2,21 +2,25 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#181818" />
     <title>kicad-wiber</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <header class="topbar">
       <div class="brand">
+        <button id="toggle-left" class="iconbtn narrow-only" title="Documents & components">
+          <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+        </button>
         <span class="logo">◆</span>
         <span class="crumbs"><span class="muted">Projects</span><span class="sep">/</span><strong id="project-name">…</strong></span>
       </div>
       <nav id="tabs" class="viewtabs">
-        <button data-view="sch">Schematic</button>
+        <button data-view="sch"><span class="long">Schematic</span><span class="short">Sch</span></button>
         <button data-view="pcb">PCB</button>
         <button data-view="3d">3D</button>
-        <button data-view="split" title="Schematic and PCB side by side, cross-probing">Sch + PCB</button>
+        <button data-view="split" title="Schematic and PCB side by side, cross-probing"><span class="long">Sch + PCB</span><span class="short">Split</span></button>
       </nav>
       <div class="topright">
         <span id="status" class="status"></span>

@@ -254,3 +254,44 @@ button.secondary:hover { background: var(--panel-2); }
 .inkbar button.done:hover { background: var(--accent-hover); }
 .chip.ink { background: #4d1a4a; color: #ffb3f9; }
 .cink { margin: 6px 0 0 34px; color: #ffb3f9; font-size: 12px; }
+
+/* ---------- phone / narrow screens ---------- */
+html, body { height: 100dvh; }
+@media (max-width: 820px) {
+  .topbar { grid-template-columns: auto 1fr auto; height: 44px; padding: 0 6px; gap: 6px; }
+  .crumbs .muted, .crumbs .sep, .status { display: none; }
+  .crumbs strong { max-width: 22vw; overflow: hidden; text-overflow: ellipsis; }
+  .viewtabs { height: 44px; overflow-x: auto; scrollbar-width: none; justify-content: flex-start; min-width: 0; }
+  .viewtabs .long { display: none; }
+  .viewtabs .short { display: inline; }
+  .viewtabs button { padding: 0 8px; white-space: nowrap; }
+  .iconbtn { width: 40px; height: 40px; }
+
+  /* Side panels become drawers over the canvas. */
+  .panel { position: fixed; top: 44px; bottom: 0; z-index: 20; box-shadow: var(--shadow-lg); }
+  .panel.left { left: 0; width: min(85vw, 320px); }
+  .panel.right { right: 0; width: min(100vw, 440px); }
+  .ptabs button { padding: 12px 8px; }
+  .list li { padding: 9px 12px; }
+
+  .stages.split { flex-direction: column; }
+  .stages.split .stage + .stage { border-left: 0; border-top: 1px solid var(--border-strong); }
+
+  .toolbar { bottom: 10px; max-width: calc(100vw - 16px); overflow-x: auto; }
+  .stages.has-layerbar .toolbar { bottom: 40px; }
+  .toolbar button { height: 40px; min-width: 40px; justify-content: center; }
+  .toolbar button > span { display: none; }
+  .inkbar button.done > span { display: inline; }
+  .inkbar { bottom: 62px; }
+  .stages.has-layerbar .inkbar { bottom: 92px; }
+  .coords { display: none; }
+  .pane-label { top: 6px; left: 6px; }
+
+  /* 16px inputs: stops iOS zooming the page on focus. */
+  .composer textarea, .composer input, .replybox input, .search { font-size: 16px; }
+  .cactions button { padding: 6px 12px; }
+}
+.narrow-only { display: none; }
+@media (max-width: 820px) { .narrow-only { display: inline-flex; } }
+.viewtabs .short { display: none; }
+@media (max-width: 820px) { .viewtabs .short { display: inline; } .viewtabs .long { display: none; } }

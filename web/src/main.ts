@@ -443,6 +443,8 @@ function inkSnapshot(pane: Pane, shapes: InkShape[], point?: [number, number]): 
 function focusComposer() {
   showRightTab("comments");
   $("#right").hidden = false;
+  if (narrow()) $("#left").hidden = true;
+  syncPanelButtons();
   $<HTMLTextAreaElement>("#composer textarea").focus();
 }
 
@@ -534,7 +536,8 @@ function activateComment(id: string, opts: { fromPin?: boolean } = {}) {
     document.querySelector(`[data-cid="${id}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     return;
   }
-  // From the list: navigate to the comment's view and anchor.
+  // From the list: navigate to the comment's view and anchor (on phones, get the drawer out of the way).
+  if (narrow()) { $("#right").hidden = true; syncPanelButtons(); }
   (async () => {
     if (!paneOf(c.view)) await showMode(c.view);
     const pane = paneOf(c.view)!;
@@ -832,7 +835,7 @@ function renderComponents() {
     ? items.map((c) => `<li data-ref="${esc(c.ref)}" class="${state.selectedRef === c.ref ? "active" : ""}"><span class="ref">${esc(c.ref)}</span><span class="val">${esc(c.value)}</span></li>`).join("")
     : `<li class="group">${kind === "3d" ? "Open Schematic or PCB once to list components" : "No components"}</li>`;
   $$<HTMLLIElement>("li[data-ref]", list).forEach((li) => {
-    li.onclick = () => selectRef(li.dataset.ref!, { zoom: true });
+    li.onclick = () => { if (narrow()) { $("#left").hidden = true; syncPanelButtons(); } selectRef(li.dataset.ref!, { zoom: true }); };
   });
 }
 
@@ -883,7 +886,8 @@ function bindUi() {
   $("#toggle-comments").onclick = () => {
     const r = $("#right");
     r.hidden = !r.hidden;
-    $("#toggle-comments").classList.toggle("active", !r.hidden);
+    if (narrow() && !r.hidden) $("#left").hidden = true;
+    syncPanelButtons();
   };
   $("#toggle-comments").classList.add("active");
   $("#comp-search").oninput = renderComponents;
@@ -927,8 +931,30 @@ function bindUi() {
   });
 }
 
+/** Phone layout: side panels are drawers over the canvas. */
+const narrow = () => matchMedia("(max-width: 820px)").matches;
+
+function bindNarrow() {
+  $("#toggle-left").onclick = () => { $("#left").hidden = !$("#left").hidden; if (!$("#left").hidden) $("#right").hidden = true; syncPanelButtons(); };
+  if (narrow()) { $("#left").hidden = true; $("#right").hidden = true; }
+  // Touching the canvas closes the drawers.
+  $("#stages").addEventListener("pointerdown", (e) => {
+    if (!narrow() || (e.target as HTMLElement).closest(".toolbar")) return;
+    $("#left").hidden = true;
+    $("#right").hidden = true;
+    syncPanelButtons();
+  }, true);
+  syncPanelButtons();
+}
+
+function syncPanelButtons() {
+  $("#toggle-comments").classList.toggle("active", !$("#right").hidden);
+  $("#toggle-left").classList.toggle("active", !$("#left").hidden);
+}
+
 async function boot() {
   bindUi();
+  bindNarrow();
   state.project = await api.project();
   $("#project-name").textContent = state.project.name;
   document.title = `${state.project.name} · kicad-wiber`;
