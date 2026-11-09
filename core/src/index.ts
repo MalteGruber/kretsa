@@ -12,3 +12,4 @@ export * from "./render";
 export * from "./sexpr";
 export * from "./design";
 export * from "./design-render";
+export * from "./diff";

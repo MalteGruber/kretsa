@@ -6,6 +6,7 @@ import { NetIndex, type NetSel } from "./nets";
 import type { ThreeView } from "./three-view";
 import { mountLibrary, type LibraryView } from "./library-view";
 import type { CheckReport, Violation } from "../../shared/check";
+import type { DesignDiff } from "../../shared/diff";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector<T>(sel)!;
 const $$ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => [...root.querySelectorAll<T>(sel)];
@@ -70,6 +71,9 @@ const state = {
   checkFilter: "errors" as "errors" | "all",
   /** Location of the violation the user clicked, shown as a marker. */
   checkMarker: null as { kind: View; at: [number, number] } | null,
+  /** "What changed since this comment": parts drawn as boxes on the canvas. */
+  diff: null as { comment: string; data: DesignDiff } | null,
+  diffs: new Map<string, DesignDiff | string>(),
 };
 
 // =====================================================================================
@@ -438,13 +442,46 @@ function updatePaneInk(pane: Pane) {
   const kc = pane.kc;
   const cam = kc?.viewer?.viewport?.camera;
   const layers = cam ? paneInk(pane) : [];
-  const key = layers.length && cam
-    ? `${cam.center.x},${cam.center.y},${cam.zoom},${pane.viewer.clientWidth},${pane.viewer.clientHeight},${state.inkVersion},${state.activeComment}`
+  const diff = cam && state.diff && pane.kc ? state.diff : null;
+  const key = (layers.length || diff) && cam
+    ? `${cam.center.x},${cam.center.y},${cam.zoom},${pane.viewer.clientWidth},${pane.viewer.clientHeight},${state.inkVersion},${state.activeComment},${diff?.comment}`
     : "";
   if (key === pane.inkKey) return;
   pane.inkKey = key;
   const toScreen = (p: [number, number]) => kc!.worldToScreen(p[0], p[1]);
-  pane.ink.innerHTML = key ? layers.map((l) => inkMarkup(l.shapes, toScreen, { opacity: l.opacity })).join("") : "";
+  pane.ink.innerHTML = key ? layers.map((l) => inkMarkup(l.shapes, toScreen, { opacity: l.opacity })).join("") + (diff ? diffMarkup(pane, diff.data, toScreen) : "") : "";
+}
+
+/** Changed parts as boxes (amber: changed, green: added); removed parts as a cross at their last board position. */
+function diffMarkup(pane: Pane, d: DesignDiff, toScreen: (p: [number, number]) => [number, number] | null): string {
+  const kinds = new Map(d.parts.map((p) => [p.ref, p.kind]));
+  const color = { added: "#3fb950", changed: "#e3a008", removed: "#f85149" } as const;
+  let out = "";
+  for (const { ref, bbox } of pane.kc?.refBoxes() ?? []) {
+    const k = kinds.get(ref);
+    if (!k) continue;
+    const a = toScreen([bbox[0], bbox[1]]), b = toScreen([bbox[2], bbox[3]]);
+    if (!a || !b) continue;
+    const x = Math.min(a[0], b[0]) - 4, y = Math.min(a[1], b[1]) - 4, w = Math.abs(b[0] - a[0]) + 8, h = Math.abs(b[1] - a[1]) + 8;
+    out += `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="3" fill="none" stroke="${color[k]}" stroke-width="2" stroke-dasharray="6 4"/>
+      <text x="${x}" y="${y - 4}" fill="${color[k]}" font-size="11" font-weight="600" paint-order="stroke" stroke="#000a" stroke-width="3">${esc(ref)} ${k}</text>`;
+  }
+  if (pane.kind === "pcb") {
+    for (const p of d.parts.filter((p) => p.kind === "removed" && p.at_mm)) {
+      const s = toScreen(p.at_mm!);
+      if (s) out += `<path d="M${s[0] - 8} ${s[1] - 8}l16 16M${s[0] + 8} ${s[1] - 8}l-16 16" stroke="${color.removed}" stroke-width="2"/><text x="${s[0] + 10}" y="${s[1] - 6}" fill="${color.removed}" font-size="11" font-weight="600" paint-order="stroke" stroke="#000a" stroke-width="3">${esc(p.ref)} removed</text>`;
+    }
+  }
+  return out;
+}
+
+async function loadDiff(c: Comment): Promise<DesignDiff | string> {
+  const cached = state.diffs.get(`${c.id}@${state.project?.rev}`);
+  if (cached) return cached;
+  const r = await fetch(`/api/diff?since=${encodeURIComponent(c.design_rev)}`);
+  const d: DesignDiff | string = r.ok ? await r.json() : (await r.json().catch(() => ({ error: r.statusText }))).error;
+  state.diffs.set(`${c.id}@${state.project?.rev}`, d);
+  return d;
 }
 
 /**
@@ -851,7 +888,7 @@ function renderComment(c: Comment): HTMLLIElement {
   const closed = c.status === "resolved" || c.status === "wontfix";
   li.className = `card${state.activeComment === c.id ? " active" : ""}${closed ? " closed" : ""}`;
   li.dataset.cid = c.id;
-  const stale = state.project && c.view !== "lib" && c.design_rev !== state.project.rev && c.status === "open";
+  const stale = state.project && c.view !== "lib" && c.design_rev !== state.project.rev && (c.status === "open" || c.status === "addressed");
   const draft = isDraft(c);
   const where = c.view === "lib" ? (c.part ? `LIB · ${c.part}${c.aspect ? ` · ${c.aspect}` : ""}` : "NEW PART") : c.view.toUpperCase();
   li.innerHTML = `
@@ -865,7 +902,7 @@ function renderComment(c: Comment): HTMLLIElement {
     <div class="ctext">${esc(c.text)}</div>
     ${c.ink_shapes?.length ? `<div class="cink">${c.ink_shapes.map((s) => `<div>✎ ${esc(describeShape(s))}</div>`).join("")}</div>` : ""}
     ${c.anchors.length ? `<div class="canchors">${c.anchors.map((a) => `<span class="tag">${esc(anchorLabel(a))}</span>`).join("")}</div>` : ""}
-    ${stale ? `<div class="stale">● design changed since this comment</div>` : ""}
+    ${stale ? `<div class="stale">● design changed since this comment <button class="linkbtn" data-diff>${state.diff?.comment === c.id ? "Hide changes" : "What changed?"}</button></div><div class="cdiff" hidden></div>` : ""}
     ${c.snapshot ? `<img src="/kretsa/${esc(c.snapshot)}" alt="snapshot" />` : ""}
     ${c.thread.map((t) => `
       <div class="reply">
@@ -878,6 +915,28 @@ function renderComment(c: Comment): HTMLLIElement {
     if ((e.target as HTMLElement).closest("button, input")) return;
     activateComment(c.id);
   };
+  const diffBtn = li.querySelector<HTMLButtonElement>("[data-diff]");
+  if (diffBtn) {
+    const box = $(".cdiff", li);
+    const show = async () => {
+      box.hidden = false;
+      box.textContent = "Comparing…";
+      const d = await loadDiff(c);
+      if (typeof d === "string") { box.textContent = d; return; }
+      state.diff = { comment: c.id, data: d };
+      diffBtn.textContent = "Hide changes";
+      box.innerHTML = !d.parts.length && !d.routing.length ? "No changes to parts, nets or routing (only other edits)."
+        : d.parts.map((p) => `<div class="dpart ${p.kind}"><button class="linkbtn" data-ref="${esc(p.ref)}">${esc(p.ref)}</button> ${esc(p.details.join("; "))}</div>`).join("")
+          + (d.routing.length ? `<div class="droute">Routing changed on ${d.routing.length} net${d.routing.length === 1 ? "" : "s"}: ${d.routing.slice(0, 6).map((r) => esc(`${r.net} (${r.length_mm[0]} → ${r.length_mm[1]} mm)`)).join(", ")}${d.routing.length > 6 ? ", …" : ""}</div>` : "");
+      box.querySelectorAll<HTMLButtonElement>("[data-ref]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); selectRef(b.dataset.ref!, { zoom: true }); }));
+    };
+    diffBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (state.diff?.comment === c.id) { state.diff = null; box.hidden = true; diffBtn.textContent = "What changed?"; return; }
+      show();
+    };
+    if (state.diff?.comment === c.id) show();
+  }
   const actions = $(".cactions", li);
   const btn = (label: string, fn: () => unknown, cls = "") => {
     const b = document.createElement("button");
@@ -1104,7 +1163,7 @@ function bindUi() {
     else if (k === "z") act("zoomsel");
     else if (k === "[") act("left");
     else if (k >= "1" && k <= "5") showMode(MODES[Number(k) - 1]!);
-    else if (k === "escape") { closeProjects(); setCommentMode(false); setInkTool(null); state.checkMarker = null; state.activeComment = null; renderComments(); }
+    else if (k === "escape") { closeProjects(); setCommentMode(false); setInkTool(null); state.checkMarker = null; state.activeComment = null; state.diff = null; renderComments(); }
   });
 }
 

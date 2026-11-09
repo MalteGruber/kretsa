@@ -11,6 +11,7 @@ import {
   checkMarkdown, REPORT_VERSION, detectKicadCli, diffChecks, findProjectDir, isProjectDir, mainPcb, matchProject, migrateLegacyDir,
   projectDirOf, ReviewStore, commentMarkdown, rootSchematic, runChecks, scanProject, toMarkdown, workspaceInfo, workspaceRoot, writeWorkspaceState,
   footprintDetail, footprintMarkdown, libraryInfo, libraryMarkdown, partDetail, partMarkdown, render3d, renderFootprint, renderPart,
+  keepRev, diffSince, diffMarkdown, readRev,
   renderPcb, renderSch, renderBoard3d, renderMarkdown, type RenderResult,
   type LibContext,
 } from "@kretsa/core";
@@ -48,6 +49,8 @@ Commands:
               --around U3[,C7]  crop to parts and mark them   --net VBUS|U3.4  show a net
               --sheet NAME (sch)   --side top|bottom (pcb, 3d)   --layers F.Cu,... (pcb)
               --size PX (1600)   --margin MM   --out DIR (.kretsa/render)
+  diff [since]   What changed in parts, nets and routing since your last full \`kretsa check\` (default),
+                 a comment (diff 3 / diff c_…: since the human wrote it), or a rev
   status    Project files, revision, comments, last check
   review    Open review comments from the human, as markdown (--json: raw review.json)
   wait      Block until the human presses "Send to AI", then print the comments sent and exit.
@@ -91,7 +94,7 @@ async function main() {
   if (cmd === "use") return use(positionals[0]);
   if (cmd === "lib") return lib(positionals, o);
 
-  const projectArg = o.project ?? (cmd === "render" ? positionals[1] : cmd === "reply" ? undefined : positionals[0]);
+  const projectArg = o.project ?? (cmd === "render" ? positionals[1] : cmd === "reply" || cmd === "diff" ? undefined : positionals[0]);
   const dir = await resolveProject(projectArg);
   await migrateLegacyDir(dir);
   switch (cmd) {
@@ -99,6 +102,7 @@ async function main() {
     case "status": return status(dir);
     case "render": return render(dir, positionals[0], o);
     case "wait": return wait(dir, o);
+    case "diff": return diff(dir, positionals[0], o);
     case "reply": return reply(dir, positionals[0], positionals.slice(1).join(" "), o);
     case "review": return review(dir, !!o.json);
     default: die(`Unknown command "${cmd}".\n\n${HELP}`);
@@ -228,7 +232,10 @@ async function check(dir: string, o: { erc?: boolean; drc?: boolean; json?: bool
   const full = !o.erc && !o.drc;
   const prev = full ? await readFile(baselineFile, "utf8").then((s) => JSON.parse(s) as CheckReport, () => null) : null;
   const diff = diffChecks(prev && prev.rev !== report.rev ? prev : null, report);
-  if (full && !report.errors.length) await Bun.write(baselineFile, JSON.stringify(report, null, 1));
+  if (full && !report.errors.length) {
+    await Bun.write(baselineFile, JSON.stringify(report, null, 1));
+    await keepRev(project); // so `kretsa diff` can compare against this check
+  }
 
   if (o.json) process.stdout.write(JSON.stringify({ ...report, diff }, null, 1) + "\n");
   else process.stdout.write(checkMarkdown(report, { limit: o.limit ? Number(o.limit) : undefined, library: o.library, diff }));
@@ -279,6 +286,24 @@ async function status(dir: string) {
     "",
   ];
   process.stdout.write(lines.join("\n"));
+}
+
+async function diff(dir: string, since: string | undefined, o: { json?: boolean; project?: string }) {
+  const project = await scanProject(dir, null);
+  let rev = "", title = "Design changes";
+  const baseline = await readFile(join(dir, ".kretsa", "check", "baseline.json"), "utf8").then((s) => JSON.parse(s) as CheckReport, () => null);
+  if (!since || since === "check") {
+    if (!baseline) die("No previous `kretsa check` to compare against. Pass a comment (#3) or a rev.");
+    rev = baseline.rev; title = "Since your last full `kretsa check`";
+  } else if (await readRev(dir, since)) rev = since;
+  else {
+    const c = await new ReviewStore(dir).find(since);
+    if (typeof c === "string") die(`"${since}" is neither a kept revision nor a comment: ${c}`);
+    rev = c.design_rev; title = `Since comment ${c.id}`;
+  }
+  const d = await diffSince(project, rev);
+  if (!d) die(`Revision ${rev} was not kept (kretsa keeps the design when a comment is made and at each full check).`);
+  process.stdout.write(o.json ? JSON.stringify(d, null, 1) + "\n" : diffMarkdown(d, title));
 }
 
 async function wait(dir: string, o: { timeout?: string; all?: boolean; json?: boolean }) {

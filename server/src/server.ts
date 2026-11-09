@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { watch as watchFs, type FSWatcher } from "node:fs";
 import {
   detectKicadCli, exportGlb, exportNetlist, migrateLegacyDir, projectDirOf, readWorkspaceState, ReviewStore, rootSchematic,
-  runChecks, safeJoin, readDesign, scanProject, workspaceInfo, writeWorkspaceState, libraryInfo, libraryTables, partDetail, partAsset, svgToPng,
+  runChecks, safeJoin, readDesign, keepRev, diffSince, scanProject, workspaceInfo, writeWorkspaceState, libraryInfo, libraryTables, partDetail, partAsset, svgToPng,
   type LibContext,
 } from "@kretsa/core";
 import type { CommentPatch, NewComment, ProjectInfo, SendRequest, ServerMessage } from "../../shared/review";
@@ -136,6 +136,12 @@ export async function startServer(opts: ServeOptions) {
         }
       }
 
+      if (path === "/api/diff") {
+        const since = url.searchParams.get("since") ?? "";
+        const d = await diffSince(project, since);
+        return d ? json(d) : json({ error: `revision ${since} was not kept (kretsa keeps the design at each comment and full check)` }, 404);
+      }
+
       if (path === "/api/components") {
         const d = await readDesign(project);
         const byRef = new Map<string, { ref: string; value: string; footprint: string; lib?: string; layer?: string; props: [string, string][] }>();
@@ -173,6 +179,7 @@ export async function startServer(opts: ServeOptions) {
           } catch (e) { console.warn(`[review] no snapshot for ${body.part}: ${(e as Error).message}`); }
         }
         const c = await review.add(body, project.rev);
+        keepRev(project).catch((e) => console.warn(`[revs] ${(e as Error).message}`)); // for "what changed since"
         broadcast({ type: "review" });
         return json(c, 201);
       }
