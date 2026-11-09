@@ -1,4 +1,4 @@
-# kretsa
+# Kretsa
 
 **Review KiCad designs with your AI agent: point, draw, comment, and let it close the loop.**
 
