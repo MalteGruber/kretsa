@@ -24,8 +24,8 @@ export function padSvg(svg: string, frac = 0.06): string {
   }).replace(/(<svg[^>]*?)\swidth="[^"]*"\s+height="[^"]*"/, "$1");
 }
 
-export function svgToPng(svg: string, width = 900, background = "#ffffff"): Buffer {
-  svg = padSvg(svg);
+export function svgToPng(svg: string, width = 900, background = "#ffffff", pad = true): Buffer {
+  if (pad) svg = padSvg(svg);
   const r = new Resvg(svg, { fitTo: { mode: "width", value: width }, background, font: { loadSystemFonts: true } });
   return r.render().asPng();
 }

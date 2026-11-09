@@ -10,3 +10,5 @@ export * from "./library";
 export * from "./library-md";
 export * from "./render";
 export * from "./sexpr";
+export * from "./design";
+export * from "./design-render";

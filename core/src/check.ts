@@ -16,7 +16,7 @@ const exists = (p: string) => stat(p).then(() => true, () => false);
  * Run kicad-cli in the project dir. kicad-cli writes a .kicad_prl next to the input if there is none;
  * remove it again so we never leave files in the user's project.
  */
-async function runCli(args: string[], projectDir: string, input: string): Promise<{ code: number; out: string }> {
+export async function runCli(args: string[], projectDir: string, input: string): Promise<{ code: number; out: string }> {
   const prl = input.replace(/\.kicad_(sch|pcb)$/, ".kicad_prl");
   const hadPrl = await exists(prl);
   try {

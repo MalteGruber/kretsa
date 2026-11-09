@@ -32,7 +32,7 @@ export function exportGlb(projectDir: string, pcbPath: string, pcbHash: string):
 }
 
 // Matches stock-library model paths (KISYS3DMOD, KICAD6_3DMODEL_DIR, ... KICAD10_3DMODEL_DIR) ending in .wrl.
-const STOCK_WRL = /(\(model\s+"\$\{(?:KISYS3DMOD|KICAD\d+_3DMODEL_DIR)\}[^"]*)\.wrl"/g;
+export const STOCK_WRL = /(\(model\s+"\$\{(?:KISYS3DMOD|KICAD\d+_3DMODEL_DIR)\}[^"]*)\.wrl"/g;
 
 /**
  * Recent KiCad builds (e.g. the 10.x AppImage) ship the stock 3D library as STEP only, and kicad-cli's

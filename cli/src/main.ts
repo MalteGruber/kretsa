@@ -11,6 +11,7 @@ import {
   checkMarkdown, REPORT_VERSION, detectKicadCli, diffChecks, findProjectDir, isProjectDir, mainPcb, matchProject, migrateLegacyDir,
   projectDirOf, ReviewStore, rootSchematic, runChecks, scanProject, toMarkdown, workspaceInfo, workspaceRoot, writeWorkspaceState,
   footprintDetail, footprintMarkdown, libraryInfo, libraryMarkdown, partDetail, partMarkdown, render3d, renderFootprint, renderPart,
+  renderPcb, renderSch, renderBoard3d, renderMarkdown, type RenderResult,
   type LibContext,
 } from "@kretsa/core";
 import type { CheckReport } from "../../shared/check";
@@ -43,6 +44,10 @@ Commands:
   lib show <part>      One part: fields, pin table, pad table, 3D model, issues, and renders to look at
                        (symbol, footprint, 3D top/iso/side PNGs)   --no-3d  --no-render
   lib fp <Lib:Name>    One footprint (also ones no symbol uses), same detail and renders
+  render sch|pcb|3d [project]   Images of the design to look at (PNG, printed paths)
+              --around U3[,C7]  crop to parts and mark them   --net VBUS|U3.4  show a net
+              --sheet NAME (sch)   --side top|bottom (pcb, 3d)   --layers F.Cu,... (pcb)
+              --size PX (1600)   --margin MM   --out DIR (.kretsa/render)
   status    Project files, revision, comments, last check
   review    Open review comments from the human, as markdown (--json: raw review.json)
   help      This text
@@ -58,6 +63,8 @@ async function main() {
       erc: { type: "boolean" }, drc: { type: "boolean" }, json: { type: "boolean" },
       limit: { type: "string" }, library: { type: "boolean" }, fail: { type: "boolean" },
       issues: { type: "boolean" }, "no-3d": { type: "boolean" }, "no-render": { type: "boolean" }, out: { type: "string" },
+      around: { type: "string" }, net: { type: "string" }, sheet: { type: "string" }, side: { type: "string" },
+      layers: { type: "string" }, size: { type: "string" }, margin: { type: "string" },
     },
   });
 
@@ -72,11 +79,12 @@ async function main() {
   if (cmd === "use") return use(positionals[0]);
   if (cmd === "lib") return lib(positionals, o);
 
-  const dir = await resolveProject(positionals[0]);
+  const dir = await resolveProject(cmd === "render" ? positionals[1] : positionals[0]);
   await migrateLegacyDir(dir);
   switch (cmd) {
     case "check": return check(dir, o);
     case "status": return status(dir);
+    case "render": return render(dir, positionals[0], o);
     case "review": return review(dir, !!o.json);
     default: die(`Unknown command "${cmd}".\n\n${HELP}`);
   }
@@ -210,6 +218,28 @@ async function check(dir: string, o: { erc?: boolean; drc?: boolean; json?: bool
   if (o.json) process.stdout.write(JSON.stringify({ ...report, diff }, null, 1) + "\n");
   else process.stdout.write(checkMarkdown(report, { limit: o.limit ? Number(o.limit) : undefined, library: o.library, diff }));
   if (o.fail && report.violations.some((v) => v.severity === "error" && !v.library)) process.exit(1);
+}
+
+async function render(dir: string, kind: string | undefined, o: {
+  around?: string; net?: string; sheet?: string; side?: string; layers?: string; size?: string; margin?: string; out?: string; json?: boolean;
+}) {
+  if (!kind || !["sch", "pcb", "3d"].includes(kind)) die("Usage: kretsa render sch|pcb|3d [project] [--around REF] [--net NET] ...");
+  const project = await scanProject(dir, await detectKicadCli());
+  if (!project.kicadCli) die("kicad-cli not found (set KICAD_CLI).");
+  if (o.side && o.side !== "top" && o.side !== "bottom") die("--side is top or bottom");
+  const opts = {
+    around: o.around, net: o.net, sheet: o.sheet, layers: o.layers, side: o.side as "top" | "bottom" | undefined,
+    size: o.size ? Number(o.size) : undefined, margin: o.margin ? Number(o.margin) : undefined,
+    outDir: resolve(o.out ?? join(dir, ".kretsa", "render")),
+  };
+  let results: RenderResult[];
+  try {
+    results = kind === "sch" ? await renderSch(project, opts)
+      : kind === "pcb" ? [await renderPcb(project, opts)]
+      : [await renderBoard3d(project, opts)];
+  } catch (e) { die(String((e as Error).message)); }
+  const what = [kind, o.around && `around ${o.around}`, o.net && `net ${o.net}`, o.sheet && `sheet ${o.sheet}`, o.side].filter(Boolean).join(" · ");
+  process.stdout.write(o.json ? JSON.stringify(results, null, 1) + "\n" : renderMarkdown(results, what));
 }
 
 async function status(dir: string) {
