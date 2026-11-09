@@ -1,11 +1,12 @@
 # Kretsa
 
-**Review KiCad designs with your AI agent: point, draw, comment, and let it close the loop.**
+**Kretsa links you, KiCad, and your AI agent.**
 
-kretsa (Swedish *krets*, "circuit", turned into a verb: *to circuit*) is a local, web-based viewer for KiCad
-schematics, PCBs and 3D models, built for the moment when an AI agent is designing the board. The agent edits the KiCad files.
-You watch the design update live in your browser, select parts and nets, scribble on the schematic, and leave comments. The agent
-reads those comments as structured data plus screenshots, makes the change, checks its own work, and replies.
+KiCad's files stay the single source of truth: the agent edits them, and you watch the result live in your browser. Kretsa
+(Swedish *krets*, "circuit", turned into a verb: *to circuit*) gives both of you tools over the same design. You get a viewer
+for the schematic, PCB and 3D model, where you can inspect, point, draw and comment. The agent gets a CLI with the same reach:
+your comments as structured data and screenshots, design checks that show what its last edit changed, and renders of every
+part it makes.
 
 ![Schematic and PCB side by side, cross-probing the D- net](docs/images/cross-probe.png)
 
@@ -17,7 +18,21 @@ reads those comments as structured data plus screenshots, makes the change, chec
  └────────────┘      kretsa review / check / lib show                          └───────────┘
 ```
 
-## What you get
+## What you get, and what the agent gets
+
+| | You, in the browser | The agent, on the command line |
+|---|---|---|
+| **See the design** | Schematic, PCB and 3D, live-reloading on every save | `kretsa status`: files, revision, comment counts, last check |
+| **Talk about it** | Select parts and nets, drop pins, draw boxes, arrows and freehand marks, comment | `kretsa review`: your comments with anchors (refdes, nets, pads, mm coordinates), drawings summarized as text (*box around D22, D23*), and cropped screenshots with your ink burned in |
+| **Answer** | Reply, resolve or reopen comment threads | Marks comments `addressed` with a reply in `.kretsa/review.json`; the thread updates live in your browser |
+| **Check the design** | Checks tab: ERC/DRC violations, click to jump to the spot | `kretsa check`: the same report as markdown, plus **what its last edit broke or fixed** |
+| **Parts** | Library tab: symbol, footprint and 3D side by side, with health checks | `kretsa lib` / `kretsa lib show`: pin and pad tables, link checks, and PNG renders of symbol, footprint and 3D to look at |
+| **Projects** | Project picker | `kretsa projects` / `kretsa use`: your browser follows the agent's switch |
+
+Everything the agent sees comes out as markdown (or `--json`), written to be read by an LLM. Nothing needs the viewer to be
+running.
+
+## Features
 
 ### Point at things, draw on them, talk to the agent
 
