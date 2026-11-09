@@ -7,6 +7,17 @@ The human reviews your design in kretsa. Their feedback is stored in the KiCad p
 - `.kretsa/review.json`: the source of truth. Types are in `shared/review.ts` in the kretsa repo.
 - `.kretsa/REVIEW.md`: a readable summary of the open and addressed comments, regenerated on every UI write.
 - `.kretsa/snap/<id>.png`: a screenshot of what the human was looking at, if they took one. Look at it.
+- `ink_shapes` on a comment: what the human drew. `covers` lists the parts a box or loop encloses. Arrows give `from_ref` and `to_ref`,
+  meaning "move this there". The snapshot shows the drawing burned in.
+
+## The `kretsa` CLI
+
+Run these from the project dir (or pass it as the first argument):
+
+- `kretsa review`: open comments as markdown, including drawings and snapshot paths.
+- `kretsa check`: ERC + DRC + schematic/PCB parity, plus **what is new or fixed since your previous `kretsa check`**. Run it
+  before and after each change, and don't leave new errors behind. Library-lookup warnings are hidden (use `--library` to show them).
+- `kretsa status`: files, revision, comment counts, check summary.
 
 ## Workflow
 
@@ -15,7 +26,7 @@ The human reviews your design in kretsa. Their feedback is stored in the KiCad p
    - `symbol` `{ref, uuid?}`: a schematic symbol or footprint, found by refdes. Prefer `uuid` when present.
    - `net` `{name}`, `pad` `{ref, pad}` (for example `U3.4`).
    - `point` `{at_mm}` and `area` `{bbox_mm}`: KiCad document coordinates in mm, in the file named by `file`.
-3. Make the change in the KiCad files. The viewer reloads automatically.
+3. Make the change in the KiCad files. The viewer reloads automatically. Run `kretsa check` to confirm you didn't add violations.
 4. Update each comment you handled. Edit only these fields:
    - set `status` to `"addressed"`. **Never** set it to `"resolved"`, because only the human resolves.
    - append to `thread`: `{"author": "ai", "text": "<what you changed>", "at": "<ISO time>"}`
