@@ -129,6 +129,7 @@ kretsa projects | use <project>     # list projects / switch the current one (th
 KRETSA_PROJECT=/path bun run dev    # frontend dev: server :7777 + Vite HMR :5177 (no project: fixtures/stickhub)
 kretsa check [project]              # ERC + DRC + parity, markdown, new/fixed since last `kretsa check`
 kretsa status | review [project]    # summary / open comments as markdown
+kretsa lib [query] | lib show <part> | lib fp <Lib:Name>   # parts, detail + renders (PNG) for the agent
 bun run typecheck
 ```
 
@@ -143,6 +144,14 @@ kretsa is generic (open source): personal standards and preferences belong in th
 Servers listen on all interfaces (LAN: `http://<lan-ip>:7777`, or `:5177` in dev). **There is no auth**, so use trusted networks only.
 `--host 127.0.0.1` / `KRETSA_HOST` keeps it local. Env vars: `KRETSA_PROJECT`, `KRETSA_PORT` (7777), `KRETSA_HOST`,
 `KICAD_CLI` (defaults to `kicad-cli` on PATH).
+
+**Libraries** (`core/src/library.ts`, `render.ts`, `library-md.ts`; types in `shared/library.ts`): only libraries in the
+`sym-lib-table`/`fp-lib-table` of the project and the workspace root. KiCad's global tables and stock libraries are deliberately
+ignored, because in a kretsa workflow the agent authors every part. A part is symbol + footprint + 3D model. The generic checks are:
+footprint resolves, pin↔pad numbers match, courtyard present, model present and not a stock path, plus Reference/Value.
+House style (field sets, KLC deviations) is the user's workspace CLAUDE.md's business, not kretsa's. Renders go to
+`<project>/.kretsa/parts/<id>/`: symbol and footprint via `kicad-cli sym|fp export svg` → resvg PNG, and 3D via a scratch board
+(footprint at the origin, model paths absolute, board version = footprint's) → `kicad-cli pcb render` top/iso/side.
 
 **Checks** (`core/src/check.ts`): `kicad-cli sch erc` and `pcb drc --schematic-parity` (JSON, mm), normalized to `CheckReport`
 (sources: erc, drc, unconnected, parity). Library-lookup types (`lib_symbol_issues`, `footprint_link_issues`, …) are flagged

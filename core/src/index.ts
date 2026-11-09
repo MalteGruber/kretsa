@@ -6,3 +6,7 @@ export * from "./kicad";
 export * from "./review";
 export * from "./check";
 export * from "./workspace";
+export * from "./library";
+export * from "./library-md";
+export * from "./render";
+export * from "./sexpr";

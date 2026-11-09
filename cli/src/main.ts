@@ -10,6 +10,8 @@ import { parseArgs } from "node:util";
 import {
   checkMarkdown, REPORT_VERSION, detectKicadCli, diffChecks, findProjectDir, isProjectDir, mainPcb, matchProject, migrateLegacyDir,
   projectDirOf, ReviewStore, rootSchematic, runChecks, scanProject, toMarkdown, workspaceInfo, workspaceRoot, writeWorkspaceState,
+  footprintDetail, footprintMarkdown, libraryInfo, libraryMarkdown, partDetail, partMarkdown, render3d, renderFootprint, renderPart,
+  type LibContext,
 } from "@kretsa/core";
 import type { CheckReport } from "../../shared/check";
 
@@ -35,6 +37,12 @@ Commands:
               --erc / --drc  only one of them   --limit N  rows per section (25)
               --library  include library-lookup warnings   --json  full report
               --fail  exit 1 if there are errors (for scripts)
+  lib [query]          Parts in the project's libraries (sym-lib-table / fp-lib-table of the project
+                       and workspace root; KiCad's stock libraries are never used), with health checks
+                         --issues  only parts with problems
+  lib show <part>      One part: fields, pin table, pad table, 3D model, issues, and renders to look at
+                       (symbol, footprint, 3D top/iso/side PNGs)   --no-3d  --no-render
+  lib fp <Lib:Name>    One footprint (also ones no symbol uses), same detail and renders
   status    Project files, revision, comments, last check
   review    Open review comments from the human, as markdown (--json: raw review.json)
   help      This text
@@ -49,6 +57,7 @@ async function main() {
       port: { type: "string" }, host: { type: "string" }, dev: { type: "boolean" },
       erc: { type: "boolean" }, drc: { type: "boolean" }, json: { type: "boolean" },
       limit: { type: "string" }, library: { type: "boolean" }, fail: { type: "boolean" },
+      issues: { type: "boolean" }, "no-3d": { type: "boolean" }, "no-render": { type: "boolean" }, out: { type: "string" },
     },
   });
 
@@ -61,6 +70,7 @@ async function main() {
   }
   if (cmd === "projects") return projects(!!o.json);
   if (cmd === "use") return use(positionals[0]);
+  if (cmd === "lib") return lib(positionals, o);
 
   const dir = await resolveProject(positionals[0]);
   await migrateLegacyDir(dir);
@@ -86,6 +96,51 @@ async function resolveProject(ref = process.env.KRETSA_PROJECT): Promise<string>
   const info = await workspaceInfo(await workspaceRoot());
   if (info.current) return projectDirOf(info.root, info.current);
   die(`No KiCad project found in ${info.root} (pass a project, cd into one, or set KRETSA_PROJECT).`);
+}
+
+/**
+ * Library context: the resolved project (KIPRJMOD) plus the workspace root's lib tables. Outside any
+ * project (e.g. a library-only workspace) the workspace root stands in for the project.
+ */
+async function libContext(): Promise<LibContext> {
+  const ws = await workspaceRoot();
+  let projectDir = ws;
+  try {
+    const inside = process.env.KRETSA_PROJECT ? resolve(process.env.KRETSA_PROJECT) : await findProjectDir();
+    projectDir = inside ?? projectDirOf(ws, (await workspaceInfo(ws)).current ?? ".");
+  } catch {}
+  return { projectDir, tableDirs: [ws] };
+}
+
+async function lib(args: string[], o: { json?: boolean; issues?: boolean; "no-3d"?: boolean; "no-render"?: boolean; out?: string }) {
+  const ctx = await libContext();
+  const [sub, ref] = args;
+  const outFor = (id: string) => resolve(o.out ?? join(ctx.projectDir, ".kretsa", "parts", id.replace(/[^\w.+-]+/g, "_")));
+  if (sub === "show") {
+    if (!ref) die("Usage: kretsa lib show <part>");
+    const part = await partDetail(ctx, ref);
+    if (typeof part === "string") die(part);
+    const renders = o["no-render"] ? undefined : await renderPart(part, outFor(part.id), ctx.projectDir, { threeD: !o["no-3d"] });
+    if (o.json) return void process.stdout.write(JSON.stringify({ ...part, renders }, null, 1) + "\n");
+    return void process.stdout.write(partMarkdown(part, renders));
+  }
+  if (sub === "fp") {
+    if (!ref) die("Usage: kretsa lib fp <Lib:Name>");
+    const fp = await footprintDetail(ctx, ref);
+    if (typeof fp === "string") die(fp);
+    const lines = footprintMarkdown(fp);
+    if (!o["no-render"]) {
+      const dir = outFor(fp.id);
+      const png = await renderFootprint(fp, dir, ctx.projectDir).catch((e) => `⚠ ${e.message}`);
+      const threeD = o["no-3d"] ? [] : await render3d(fp, dir, ctx.projectDir).catch((e) => [`⚠ ${e.message}`]);
+      lines.push("## Renders (look at these)", "", `- footprint: ${png}`, ...threeD.map((p) => `- 3D: ${p}`), "");
+    }
+    return void process.stdout.write(o.json ? JSON.stringify(fp, null, 1) + "\n" : lines.join("\n"));
+  }
+  const info = await libraryInfo(ctx);
+  const query = sub === "list" ? ref : sub;
+  if (o.json) return void process.stdout.write(JSON.stringify(info, null, 1) + "\n");
+  process.stdout.write(libraryMarkdown(info, { query, issuesOnly: o.issues }));
 }
 
 async function projects(json: boolean) {

@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "main": "src/index.ts",
-  "scripts": { "typecheck": "tsc -p ." },
-  "devDependencies": { "@types/bun": "latest", "typescript": "^5.9.0" }
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "@resvg/resvg-js": "^2.6.2"
+  }
 }
