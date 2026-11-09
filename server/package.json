@@ -1,9 +1,17 @@
 {
   "name": "@kretsa/server",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "main": "src/server.ts",
-  "scripts": { "typecheck": "tsc -p ." },
-  "dependencies": { "@kretsa/core": "workspace:*" },
-  "devDependencies": { "@types/bun": "latest", "typescript": "^5.9.0" }
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@kretsa/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9.0"
+  }
 }

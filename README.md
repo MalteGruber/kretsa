@@ -179,5 +179,5 @@ libraries outside the project folder aren't watched live, and there are no KLC s
 
 ## License
 
-<!-- TODO: choose a license (MIT would match KiCanvas). fixtures/stickhub keeps its own CC BY-NC-SA 4.0 license. -->
-TBD
+[MIT](LICENSE). Third-party parts keep their own licenses: `vendor/kicanvas` (MIT), `fixtures/stickhub` (CC BY-NC-SA 4.0,
+see its `LICENSE.md`), and `fixtures/pic_programmer` (from KiCad's demo projects).
