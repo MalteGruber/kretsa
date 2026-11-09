@@ -753,7 +753,7 @@ async function gotoViolation(v: Violation) {
   const at = v.items.find((i) => i.at_mm)?.at_mm;
   state.checkMarker = at ? { kind, at } : null;
   if (at) {
-    const span = 12;
+    const span = kind === "pcb" ? 3 : 12; // mm around the violation; PCB problems are tiny
     pane.kc.zoomToMm([at[0] - span, at[1] - span, at[0] + span, at[1] + span]);
   }
   const ref = v.items.find((i) => i.ref && !i.ref.startsWith("#"))?.ref;
