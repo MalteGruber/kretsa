@@ -1,6 +1,6 @@
 import { defineConfig } from "vite";
 
-const API = `http://localhost:${process.env.WIBER_PORT ?? 7777}`;
+const API = `http://localhost:${process.env.KRETSA_PORT ?? 7777}`;
 
 export default defineConfig({
   server: {
@@ -11,7 +11,7 @@ export default defineConfig({
     proxy: {
       "/api": API,
       "/project": API,
-      "/wiber": API,
+      "/kretsa": API,
       "/ws": { target: API.replace("http", "ws"), ws: true },
     },
   },

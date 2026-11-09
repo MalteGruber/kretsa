@@ -1,5 +1,5 @@
 // The review contract between the human (via the web UI) and the AI agent.
-// Persisted as <project>/.wiber/review.json. Keep changes backwards compatible; bump `version` otherwise.
+// Persisted as <project>/.kretsa/review.json. Keep changes backwards compatible; bump `version` otherwise.
 // Spec + agent instructions: docs/review-format.md
 
 export type View = "sch" | "pcb" | "3d";
@@ -44,9 +44,9 @@ export interface Comment {
   sheet?: string;
   layer?: string;
   anchors: Anchor[];
-  ink?: string; // .wiber-relative path to SVG (generated from ink_shapes, viewBox in document mm)
+  ink?: string; // .kretsa-relative path to SVG (generated from ink_shapes, viewBox in document mm)
   ink_shapes?: InkShape[];
-  snapshot?: string; // .wiber-relative path to PNG
+  snapshot?: string; // .kretsa-relative path to PNG
   text: string;
   design_rev: string;
   thread: ThreadEntry[];

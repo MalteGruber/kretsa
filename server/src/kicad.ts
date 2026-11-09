@@ -18,11 +18,11 @@ export async function detectKicadCli(): Promise<string | null> {
 const inflight = new Map<string, Promise<string>>();
 
 /**
- * Export a board to GLB, cached by board file hash under <project>/.wiber/cache/.
+ * Export a board to GLB, cached by board file hash under <project>/.kretsa/cache/.
  * Concurrent requests for the same hash share one kicad-cli run.
  */
 export function exportGlb(projectDir: string, pcbPath: string, pcbHash: string): Promise<string> {
-  const out = join(projectDir, ".wiber", "cache", `${pcbHash}.glb`);
+  const out = join(projectDir, ".kretsa", "cache", `${pcbHash}.glb`);
   let job = inflight.get(out);
   if (!job) {
     job = runExport(projectDir, pcbPath, out).finally(() => inflight.delete(out));
@@ -94,7 +94,7 @@ export function exportNetlist(projectDir: string, schPath: string, rev: string):
 }
 
 async function runNetlist(projectDir: string, schPath: string): Promise<Netlist> {
-  const out = join(projectDir, ".wiber", "cache", `netlist-${process.pid}-${Date.now()}.xml`);
+  const out = join(projectDir, ".kretsa", "cache", `netlist-${process.pid}-${Date.now()}.xml`);
   await mkdir(dirname(out), { recursive: true });
   try {
     const p = Bun.spawn([CLI, "sch", "export", "netlist", "--format", "kicadxml", "-o", out, schPath], {

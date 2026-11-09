@@ -2,15 +2,15 @@
 
 This file is meant to be copied into, or referenced from, the CLAUDE.md or AGENTS.md of the **KiCad project being designed**.
 
-The human reviews your design in kicad-wiber. Their feedback is stored in the KiCad project directory:
+The human reviews your design in kretsa. Their feedback is stored in the KiCad project directory:
 
-- `.wiber/review.json`: the source of truth. Types are in `shared/review.ts` in the kicad-wiber repo.
-- `.wiber/REVIEW.md`: a readable summary of the open and addressed comments, regenerated on every UI write.
-- `.wiber/snap/<id>.png`: a screenshot of what the human was looking at, if they took one. Look at it.
+- `.kretsa/review.json`: the source of truth. Types are in `shared/review.ts` in the kretsa repo.
+- `.kretsa/REVIEW.md`: a readable summary of the open and addressed comments, regenerated on every UI write.
+- `.kretsa/snap/<id>.png`: a screenshot of what the human was looking at, if they took one. Look at it.
 
 ## Workflow
 
-1. Read `.wiber/review.json` and work through the comments with `status: "open"`.
+1. Read `.kretsa/review.json` and work through the comments with `status: "open"`.
 2. Use `anchors` to find what each comment refers to:
    - `symbol` `{ref, uuid?}`: a schematic symbol or footprint, found by refdes. Prefer `uuid` when present.
    - `net` `{name}`, `pad` `{ref, pad}` (for example `U3.4`).

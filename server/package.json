@@ -1,5 +1,5 @@
 {
-  "name": "@wiber/server",
+  "name": "@kretsa/server",
   "private": true,
   "type": "module",
   "scripts": {

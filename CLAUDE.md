@@ -1,4 +1,4 @@
-# kicad-wiber
+# kretsa
 
 A local, web-based viewer for KiCad projects (schematic, PCB, 3D). It is the **review channel between a
 human and an AI agent that is designing a PCB**. The agent edits the KiCad files. The human
@@ -14,14 +14,14 @@ Only the AI agent (or the human in KiCad) changes the design. The viewer's only 
 2. The server watches the dir, regenerates derived assets (the 3D GLB, and optionally SVG or netlist), and
    pushes a reload to the browser.
 3. The human views the sch, pcb, or 3D tab, selects items or areas, sketches, and writes comments.
-4. The comments are saved to `<project>/.wiber/` as plain JSON plus PNG snapshots.
-5. The agent reads `.wiber/review.json`, makes the changes, and marks each comment `addressed` with a
+4. The comments are saved to `<project>/.kretsa/` as plain JSON plus PNG snapshots.
+5. The agent reads `.kretsa/review.json`, makes the changes, and marks each comment `addressed` with a
    short note. The human then resolves it or reopens it.
 
 ## Architecture (planned)
 
 ```
-kicad-wiber/
+kretsa/
   server/      Bun/TS: file watcher, kicad-cli runner, static + REST + WebSocket, review store
   web/         Vite + TS frontend: tabs for Schematic | PCB | 3D, annotation layer, comment panel
   vendor/      kicanvas (git submodule or fork). Do not edit in place without noting it here
@@ -32,7 +32,7 @@ kicad-wiber/
   the server and package management unless there is a reason not to.
 - **Server** responsibilities: `fs.watch` with debounce on the project dir. Run `kicad-cli` for
   derived assets and cache them by file hash. Serve the raw KiCad files to the frontend. Push
-  `{type:"reload", files:[...]}` over WebSocket. Read and write `.wiber/review.json`.
+  `{type:"reload", files:[...]}` over WebSocket. Read and write `.kretsa/review.json`.
 - **Frontend** responsibilities: render sch and pcb in 2D, render 3D, and provide an overlay layer for
   pins, rectangles, and freehand ink on all three views. Comment threads go in a side panel.
 
@@ -63,7 +63,7 @@ detects kicad-cli and degrades gracefully without it, so 2D still works.
 - GLB node names are the bare refdes (`U2`, `J7`, …), so 3D click-to-pick by node name works. Mesh units are metres.
 - Export takes about 6 s for an approximately 90-part board (stickhub), so the cache matters.
 
-## Review data format (`<project>/.wiber/review.json`)
+## Review data format (`<project>/.kretsa/review.json`)
 
 This is the contract with the AI agent, so keep it stable, human-readable, and diff-friendly.
 
@@ -100,7 +100,7 @@ Rules:
 - Prefer semantic anchors (refdes, UUID, net, pad `U3.4`) over bare geometry, and add geometry as context.
 - Write files atomically (write to a temp file, then rename). Both the agent and the server may touch
   this file. The agent may only append to `thread` and change `status`.
-- Also generate `.wiber/REVIEW.md`, a readable summary of the open comments, for agents that work
+- Also generate `.kretsa/REVIEW.md`, a readable summary of the open comments, for agents that work
   better from markdown.
 
 ## Conventions
@@ -119,22 +119,22 @@ Rules:
 git submodule update --init         # vendor/kicanvas
 bun install
 bun run build:kicanvas              # builds vendor/kicanvas -> web/public/vendor/kicanvas.js (gitignored)
-WIBER_PROJECT=/path/to/kicad/project bun run dev   # server :7777 + vite :5177 → open http://localhost:5177
+KRETSA_PROJECT=/path/to/kicad/project bun run dev   # server :7777 + vite :5177 → open http://localhost:5177
 bun run typecheck
 bun run build && bun run start /path/to/project    # prod: server also serves web/dist on :7777
 ```
 
 Both servers listen on all interfaces (LAN access: `http://<lan-ip>:5177`). **There is no auth**, so use trusted networks only.
-Set `WIBER_HOST=127.0.0.1` to keep the prod server local.
+Set `KRETSA_HOST=127.0.0.1` to keep the prod server local.
 
-Env vars: `WIBER_PROJECT` (or the first CLI arg to the server; defaults to `fixtures/stickhub`), `WIBER_PORT` (7777),
+Env vars: `KRETSA_PROJECT` (or the first CLI arg to the server; defaults to `fixtures/stickhub`), `KRETSA_PORT` (7777),
 `KICAD_CLI` (defaults to `kicad-cli` on PATH).
 
 ## Code map
 
 - `shared/review.ts`: types shared by server and web. This is **the review contract**, so change it carefully.
 - `server/src/index.ts`: Bun.serve routes, WebSocket broadcast, project file watcher.
-  `project.ts` scans and hashes files. `kicad.ts` handles kicad-cli detection and GLB export, cached in `.wiber/cache/<hash>.glb`.
+  `project.ts` scans and hashes files. `kicad.ts` handles kicad-cli detection and GLB export, cached in `.kretsa/cache/<hash>.glb`.
   `review.ts` holds the review store (atomic writes, REVIEW.md generation, snapshot PNGs).
 - `web/src/main.ts`: app state, tabs, comment panel. `kicanvas-view.ts` mounts `<kicanvas-embed>` and
   maps `kicanvas:select` events to anchors. `three-view.ts` is the three.js GLB viewer (lazy-loaded).
@@ -192,7 +192,7 @@ icons only. KiCanvas supports touch pan and pinch natively. The draw catcher use
 ## API
 
 `GET /api/project` · `GET /api/netlist` · `GET /project/<file>` (raw) · `GET /api/3d.glb` · `GET /api/review` ·
-`POST /api/review/comments` · `PATCH /api/review/comments/:id` `{status?, reply?}` · `GET /wiber/<path>` ·
+`POST /api/review/comments` · `PATCH /api/review/comments/:id` `{status?, reply?}` · `GET /kretsa/<path>` ·
 `WS /ws` → `{type:"reload", rev, changed[]}` | `{type:"review"}`
 
 ## Roadmap / known gaps

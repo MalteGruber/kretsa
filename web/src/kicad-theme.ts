@@ -68,8 +68,8 @@ function recolor(theme: any, colors: Record<string, string>) {
 
 /** Apply the dark palette to a KiCanvas viewer and repaint it. */
 export function applyDarkTheme(viewer: any, kind: "sch" | "pcb") {
-  if (!viewer?.theme || viewer.__wiberThemed) return;
-  viewer.__wiberThemed = true;
+  if (!viewer?.theme || viewer.__kretsaThemed) return;
+  viewer.__kretsaThemed = true;
   recolor(viewer.theme, kind === "sch" ? SCH : BOARD);
   // Translucent VS Code-blue selection instead of the default white box (opaque on schematics).
   const Color = viewer.theme.background.constructor;

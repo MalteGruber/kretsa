@@ -3,14 +3,14 @@ import { dirname, join } from "node:path";
 import type { Comment, CommentPatch, InkShape, NewComment, Review } from "../../shared/review";
 
 export class ReviewStore {
-  readonly wiberDir: string;
+  readonly dataDir: string;
   readonly file: string;
   /** Content we last wrote ourselves, so the watcher can ignore our own writes. */
   lastWritten = "";
 
   constructor(projectDir: string) {
-    this.wiberDir = join(projectDir, ".wiber");
-    this.file = join(this.wiberDir, "review.json");
+    this.dataDir = join(projectDir, ".kretsa");
+    this.file = join(this.dataDir, "review.json");
   }
 
   async load(): Promise<Review> {
@@ -28,7 +28,7 @@ export class ReviewStore {
     const json = JSON.stringify(r, null, 2) + "\n";
     this.lastWritten = json;
     await atomicWrite(this.file, json);
-    await atomicWrite(join(this.wiberDir, "REVIEW.md"), toMarkdown(r));
+    await atomicWrite(join(this.dataDir, "REVIEW.md"), toMarkdown(r));
   }
 
   async add(input: NewComment, designRev: string): Promise<Comment> {
@@ -45,13 +45,13 @@ export class ReviewStore {
     if (snapshotPng?.startsWith("data:image/png;base64,")) {
       const rel = `snap/${c.id}.png`;
       const buf = Buffer.from(snapshotPng.slice("data:image/png;base64,".length), "base64");
-      await mkdir(join(this.wiberDir, "snap"), { recursive: true });
-      await writeFile(join(this.wiberDir, rel), buf);
+      await mkdir(join(this.dataDir, "snap"), { recursive: true });
+      await writeFile(join(this.dataDir, rel), buf);
       c.snapshot = rel;
     }
     if (c.ink_shapes?.length) {
       const rel = `ink/${c.id}.svg`;
-      await atomicWrite(join(this.wiberDir, rel), inkSvg(c.ink_shapes));
+      await atomicWrite(join(this.dataDir, rel), inkSvg(c.ink_shapes));
       c.ink = rel;
     }
     r.comments.push(c);
@@ -132,7 +132,7 @@ export function toMarkdown(r: Review): string {
   const lines = [
     "# Design review",
     "",
-    "_Generated from review.json by kicad-wiber. Do not edit by hand; edit review.json._",
+    "_Generated from review.json by kretsa. Do not edit by hand; edit review.json._",
     "",
     `Open: ${r.comments.filter((c) => c.status === "open").length} · ` +
       `Addressed (awaiting human): ${r.comments.filter((c) => c.status === "addressed").length}`,
@@ -145,9 +145,9 @@ export function toMarkdown(r: Review): string {
     if (c.ink_shapes?.length) {
       lines.push("Drawing (document mm):");
       for (const s of c.ink_shapes) lines.push(`- ${describeInk(s)}`);
-      lines.push(c.ink ? `  (SVG: .wiber/${c.ink})` : "", "");
+      lines.push(c.ink ? `  (SVG: .kretsa/${c.ink})` : "", "");
     }
-    if (c.snapshot) lines.push(`Snapshot: .wiber/${c.snapshot}`, "");
+    if (c.snapshot) lines.push(`Snapshot: .kretsa/${c.snapshot}`, "");
     for (const t of c.thread) lines.push(`> **${t.author}** (${t.at}): ${t.text}`, "");
   }
   return lines.join("\n");

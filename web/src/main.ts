@@ -701,7 +701,7 @@ function renderComment(c: Comment): HTMLLIElement {
     ${c.ink_shapes?.length ? `<div class="cink">${c.ink_shapes.map((s) => `<div>✎ ${esc(describeShape(s))}</div>`).join("")}</div>` : ""}
     ${c.anchors.length ? `<div class="canchors">${c.anchors.map((a) => `<span class="tag">${esc(anchorLabel(a))}</span>`).join("")}</div>` : ""}
     ${stale ? `<div class="stale">● design changed since this comment</div>` : ""}
-    ${c.snapshot ? `<img src="/wiber/${esc(c.snapshot)}" alt="snapshot" />` : ""}
+    ${c.snapshot ? `<img src="/kretsa/${esc(c.snapshot)}" alt="snapshot" />` : ""}
     ${c.thread.map((t) => `
       <div class="reply">
         <span class="avatar ${t.author}">${t.author === "ai" ? "AI" : "You"}</span>
@@ -957,7 +957,7 @@ async function boot() {
   bindNarrow();
   state.project = await api.project();
   $("#project-name").textContent = state.project.name;
-  document.title = `${state.project.name} · kicad-wiber`;
+  document.title = `${state.project.name} · kretsa`;
   renderStatus();
   renderProps();
 

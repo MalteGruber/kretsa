@@ -7,7 +7,7 @@ const KINDS: Record<string, ProjectFile["kind"]> = {
   ".kicad_sch": "sch",
   ".kicad_pcb": "pcb",
 };
-const SKIP_DIRS = new Set([".wiber", ".git", "node_modules"]);
+const SKIP_DIRS = new Set([".kretsa", ".wiber", ".git", "node_modules"]);
 
 function hash(data: string | Uint8Array): string {
   return new Bun.CryptoHasher("sha256").update(data).digest("hex").slice(0, 16);

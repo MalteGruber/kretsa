@@ -1,5 +1,5 @@
 import { watch } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, rename, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { CommentPatch, NewComment, ProjectInfo, ServerMessage } from "../../shared/review";
 import { detectKicadCli, exportGlb, exportNetlist } from "./kicad";
@@ -7,15 +7,25 @@ import { safeJoin, scanProject } from "./project";
 import { ReviewStore } from "./review";
 
 const ROOT = resolve(import.meta.dir, "../..");
-const PROJECT_DIR = resolve(process.argv[2] ?? process.env.WIBER_PROJECT ?? join(ROOT, "fixtures/stickhub"));
-const PORT = Number(process.env.WIBER_PORT ?? 7777);
+const PROJECT_DIR = resolve(process.argv[2] ?? process.env.KRETSA_PROJECT ?? join(ROOT, "fixtures/stickhub"));
+const PORT = Number(process.env.KRETSA_PORT ?? 7777);
 // 0.0.0.0 so the prod server is reachable on the LAN. No auth: trusted networks only.
-const HOST = process.env.WIBER_HOST ?? "0.0.0.0";
+const HOST = process.env.KRETSA_HOST ?? "0.0.0.0";
 const WEB_DIST = join(ROOT, "web/dist");
 
 if (!(await stat(PROJECT_DIR).then((s) => s.isDirectory(), () => false))) {
   console.error(`Project dir not found: ${PROJECT_DIR}`);
   process.exit(1);
+}
+
+// Projects reviewed before the rename keep their data in .wiber/: move it once.
+{
+  const legacy = join(PROJECT_DIR, ".wiber"), current = join(PROJECT_DIR, ".kretsa");
+  const exists = (p: string) => stat(p).then(() => true, () => false);
+  if ((await exists(legacy)) && !(await exists(current))) {
+    await rename(legacy, current);
+    console.log(`migrated ${legacy} -> ${current}`);
+  }
 }
 
 const kicadCli = await detectKicadCli();
@@ -89,8 +99,8 @@ const server = Bun.serve({
       return json(c);
     }
 
-    if (path.startsWith("/wiber/")) {
-      const p = safeJoin(review.wiberDir, path.slice("/wiber/".length));
+    if (path.startsWith("/kretsa/")) {
+      const p = safeJoin(review.dataDir, path.slice("/kretsa/".length));
       return p ? new Response(Bun.file(p)) : new Response("forbidden", { status: 403 });
     }
 
@@ -126,8 +136,8 @@ let reviewChanged = false;
 watch(PROJECT_DIR, { recursive: true }, (_ev, name) => {
   if (!name) return;
   const n = name.toString();
-  if (n === ".wiber/review.json") reviewChanged = true;
-  else if (!/\.kicad_(pro|sch|pcb)$/.test(n) || n.startsWith(".wiber/")) return;
+  if (n === ".kretsa/review.json") reviewChanged = true;
+  else if (!/\.kicad_(pro|sch|pcb)$/.test(n) || n.startsWith(".kretsa/")) return;
   clearTimeout(timer);
   timer = setTimeout(onChange, 300);
 });
@@ -147,6 +157,6 @@ async function onChange() {
   broadcast({ type: "reload", rev: next.rev, changed });
 }
 
-console.log(`kicad-wiber server  http://localhost:${PORT}`);
+console.log(`kretsa server  http://localhost:${PORT}`);
 console.log(`  project: ${PROJECT_DIR} (${project.files.length} files)`);
 console.log(`  kicad-cli: ${kicadCli ?? "NOT FOUND (3D disabled)"}`);

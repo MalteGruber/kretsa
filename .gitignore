@@ -4,7 +4,7 @@ web/public/vendor/
 *.log
 .DS_Store
 # per-project review data lives next to the KiCad project; ignore it for fixtures
-fixtures/**/.wiber/
+fixtures/**/.kretsa/
 # KiCad backups / locks
 *-backups/
 *.lck
