@@ -124,14 +124,21 @@ bun install
 bun run build:kicanvas              # builds vendor/kicanvas -> web/public/vendor/kicanvas.js (gitignored)
 bun link                            # optional: puts `kretsa` on PATH (else: bun run kretsa <cmd> / bun cli/src/main.ts)
 
-kretsa serve [project]              # web viewer on :7777 (builds web/dist on first run), LAN-reachable
+kretsa serve [dir]                  # web viewer for a workspace or project dir (default cwd), :7777, LAN-reachable
+kretsa projects | use <project>     # list projects / switch the current one (the open viewer follows)
 KRETSA_PROJECT=/path bun run dev    # frontend dev: server :7777 + Vite HMR :5177 (no project: fixtures/stickhub)
 kretsa check [project]              # ERC + DRC + parity, markdown, new/fixed since last `kretsa check`
 kretsa status | review [project]    # summary / open comments as markdown
 bun run typecheck
 ```
 
-The project dir defaults to `$KRETSA_PROJECT`, else the nearest dir at or above cwd containing a `.kicad_pro`.
+**Workspace** (`core/src/workspace.ts`): any folder with KiCad projects, or a single project folder. Projects are discovered up to
+5 levels deep, including nested ones. A project scan stops at subfolders that have their own `.kicad_pro`. The **current project** is
+shared by viewer and agent through `<workspace>/.kretsa/workspace.json`. `kretsa use` writes it; the server watches it and
+broadcasts `{type:"project"}`, and the page reloads. Picking a project in the viewer (`P`, or click the breadcrumb) writes it too.
+CLI project resolution: the `[project]` arg (a path, or a name/id) → `$KRETSA_PROJECT` → the project containing cwd → the workspace's
+current project. The workspace root is `$KRETSA_WORKSPACE`, else the nearest ancestor with `.kretsa/workspace.json`, else cwd.
+kretsa is generic (open source): personal standards and preferences belong in the user's workspace CLAUDE.md, not here.
 
 Servers listen on all interfaces (LAN: `http://<lan-ip>:7777`, or `:5177` in dev). **There is no auth**, so use trusted networks only.
 `--host 127.0.0.1` / `KRETSA_HOST` keeps it local. Env vars: `KRETSA_PROJECT`, `KRETSA_PORT` (7777), `KRETSA_HOST`,
@@ -206,9 +213,9 @@ icons only. KiCanvas supports touch pan and pinch natively. The draw catcher use
 
 ## API
 
-`GET /api/project` · `GET /api/netlist` · `GET /api/check` · `GET /project/<file>` (raw) · `GET /api/3d.glb` · `GET /api/review` ·
+`GET /api/workspace` · `POST /api/workspace/current {id}` · `GET /api/project` · `GET /api/netlist` · `GET /api/check` · `GET /project/<file>` (raw) · `GET /api/3d.glb` · `GET /api/review` ·
 `POST /api/review/comments` · `PATCH /api/review/comments/:id` `{status?, reply?}` · `GET /kretsa/<path>` ·
-`WS /ws` → `{type:"reload", rev, changed[]}` | `{type:"review"}`
+`WS /ws` → `{type:"reload", rev, changed[]}` | `{type:"review"}` | `{type:"project", id}`
 
 ## Roadmap / known gaps
 

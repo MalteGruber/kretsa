@@ -1013,10 +1013,11 @@ function bindUi() {
     if (k === "c") act("comment");
     else if (k === "d") act("draw");
     else if (k === "f") act("fit");
+    else if (k === "p") openProjects();
     else if (k === "z") act("zoomsel");
     else if (k === "[") act("left");
     else if (k >= "1" && k <= "4") showMode(MODES[Number(k) - 1]!);
-    else if (k === "escape") { setCommentMode(false); setInkTool(null); state.checkMarker = null; state.activeComment = null; renderComments(); }
+    else if (k === "escape") { closeProjects(); setCommentMode(false); setInkTool(null); state.checkMarker = null; state.activeComment = null; renderComments(); }
   });
 }
 
@@ -1041,10 +1042,51 @@ function syncPanelButtons() {
   $("#toggle-left").classList.toggle("active", !$("#left").hidden);
 }
 
+// =====================================================================================
+// Project browser (workspace)
+// =====================================================================================
+
+async function openProjects() {
+  const overlay = $("#projects");
+  overlay.hidden = false;
+  $("#projects-list").innerHTML = `<li class="empty">Loading…</li>`;
+  const ws = await api.workspace();
+  $("#projects-root").textContent = ws.root;
+  const render = () => {
+    const q = $<HTMLInputElement>("#projects-search").value.toLowerCase();
+    const items = ws.projects.filter((p) => !q || p.id.toLowerCase().includes(q) || p.name.toLowerCase().includes(q));
+    $("#projects-list").innerHTML = items.length ? items.map((p) => `
+      <li data-id="${esc(p.id)}" class="${p.id === ws.current ? "current" : ""}">
+        <div class="pname">${esc(p.name)}${p.id === ws.current ? ` <span class="tag">current</span>` : ""}</div>
+        <div class="pmeta">${esc(p.id)} · ${p.hasSch ? "sch" : ""}${p.hasSch && p.hasPcb ? " + " : ""}${p.hasPcb ? "pcb" : ""} · ${esc(ago(p.modified))}
+          ${p.open ? ` · <span class="popen">${p.open} open</span>` : ""}${p.addressed ? ` · ${p.addressed} addressed` : ""}</div>
+      </li>`).join("") : `<li class="empty">No KiCad projects found in ${esc(ws.root)}</li>`;
+    $$<HTMLLIElement>("#projects-list li[data-id]").forEach((li) => (li.onclick = async () => {
+      if (li.dataset.id === ws.current) return closeProjects();
+      li.classList.add("busy");
+      await api.setProject(li.dataset.id!); // the server announces the switch; the page reloads on it
+    }));
+  };
+  $("#projects-search").oninput = render;
+  render();
+  if (!narrow()) $<HTMLInputElement>("#projects-search").focus();
+}
+
+function closeProjects() { $("#projects").hidden = true; }
+
 async function boot() {
   bindUi();
   bindNarrow();
-  state.project = await api.project();
+  $("#projects-btn").onclick = openProjects;
+  $("#project-name").onclick = openProjects;
+  $("#projects-close").onclick = closeProjects;
+  $("#projects").addEventListener("click", (e) => { if (e.target === $("#projects")) closeProjects(); });
+  try { state.project = await api.project(); }
+  catch {
+    // Workspace without projects (or the server can't read one): the browser explains.
+    connect((m) => { if (m.type === "project") location.reload(); }, () => {});
+    return openProjects();
+  }
   $("#project-name").textContent = state.project.name;
   document.title = `${state.project.name} · kretsa`;
   renderStatus();
@@ -1053,6 +1095,9 @@ async function boot() {
   connect(
     async (msg) => {
       if (msg.type === "review") return refreshReview();
+      // Another project became current (picked here, in another browser, or by the agent): start over.
+      if (msg.type === "project") return location.reload();
+      if (msg.type !== "reload") return;
       state.project = await api.project();
       renderStatus();
       await loadNetlist();

@@ -14,7 +14,7 @@
           <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
         </button>
         <span class="logo">◆</span>
-        <span class="crumbs"><span class="muted">Projects</span><span class="sep">/</span><strong id="project-name">…</strong></span>
+        <span class="crumbs"><button id="projects-btn" class="crumb muted" title="Switch project">Projects</button><span class="sep">/</span><button id="project-name" class="crumb strong" title="Switch project">…</button></span>
       </div>
       <nav id="tabs" class="viewtabs">
         <button data-view="sch"><span class="long">Schematic</span><span class="short">Sch</span></button>
@@ -119,6 +119,14 @@
           <div id="props"></div>
         </div>
       </aside>
+    </div>
+    <div id="projects" class="overlay" hidden>
+      <div class="overlay-box">
+        <div class="overlay-head"><h2>Projects</h2><span id="projects-root" class="muted"></span><button id="projects-close" class="iconbtn" title="Close (Esc)">✕</button></div>
+        <input id="projects-search" class="search" placeholder="Filter projects…" />
+        <ul id="projects-list" class="projlist"></ul>
+        <div class="overlay-foot muted">The agent switches with <code>kretsa use &lt;project&gt;</code>; this view follows.</div>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

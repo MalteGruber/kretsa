@@ -8,8 +8,8 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import {
-  checkMarkdown, REPORT_VERSION, detectKicadCli, diffChecks, findProjectDir, mainPcb, migrateLegacyDir, ReviewStore, rootSchematic,
-  runChecks, scanProject, toMarkdown,
+  checkMarkdown, REPORT_VERSION, detectKicadCli, diffChecks, findProjectDir, isProjectDir, mainPcb, matchProject, migrateLegacyDir,
+  projectDirOf, ReviewStore, rootSchematic, runChecks, scanProject, toMarkdown, workspaceInfo, workspaceRoot, writeWorkspaceState,
 } from "@kretsa/core";
 import type { CheckReport } from "../../shared/check";
 
@@ -17,13 +17,19 @@ const ROOT = resolve(import.meta.dir, "../..");
 
 const HELP = `kretsa: KiCad design review between you (web viewer) and an AI agent (this CLI)
 
-Usage: kretsa <command> [project-dir] [options]
+Usage: kretsa <command> [project] [options]
 
-The project dir defaults to $KRETSA_PROJECT, else the nearest dir at/above cwd with a .kicad_pro.
+A workspace is any folder with KiCad projects in it (or a single project folder). The project a
+command acts on is, in order: the [project] argument (a path, or a name/id from \`kretsa projects\`),
+$KRETSA_PROJECT, the project you are inside (cwd or a parent has a .kicad_pro), else the workspace's
+current project, which is shared with the web viewer.
 
 Commands:
-  serve     Start the web viewer (http://<host>:7777, LAN-reachable)
-              --port N  --host ADDR  --dev (Vite + HMR on :5177 for frontend work)
+  serve [dir]    Start the web viewer for a workspace or project dir (default: cwd)
+                   http://<host>:7777, LAN-reachable. --port N  --host ADDR
+                   --dev  Vite + HMR on :5177 (frontend work)
+  projects       List the workspace's projects; * marks the current one
+  use <project>  Make <project> current, for later commands and in the open viewer
   check     Run ERC (schematic) + DRC with schematic parity (PCB); prints what is new/fixed
             since your previous \`kretsa check\`
               --erc / --drc  only one of them   --limit N  rows per section (25)
@@ -48,18 +54,61 @@ async function main() {
 
   if (cmd === "help" || cmd === "--help" || cmd === "-h") return void process.stdout.write(HELP);
 
-  let dir = await findProjectDir(positionals[0]);
-  if (!dir && cmd === "serve" && o.dev) dir = join(ROOT, "fixtures/stickhub"); // frontend dev without a project
-  if (!dir) die(`No KiCad project found${positionals[0] ? ` at ${positionals[0]}` : " (pass a dir, set KRETSA_PROJECT, or cd into one)"}.`);
-  await migrateLegacyDir(dir);
+  if (cmd === "serve") {
+    let root = resolve(positionals[0] ?? process.env.KRETSA_WORKSPACE ?? process.env.KRETSA_PROJECT ?? process.cwd());
+    if (o.dev && !positionals[0] && !(await workspaceInfo(root)).projects.length) root = join(ROOT, "fixtures"); // frontend dev
+    return serve(root, o);
+  }
+  if (cmd === "projects") return projects(!!o.json);
+  if (cmd === "use") return use(positionals[0]);
 
+  const dir = await resolveProject(positionals[0]);
+  await migrateLegacyDir(dir);
   switch (cmd) {
-    case "serve": return serve(dir, o);
     case "check": return check(dir, o);
     case "status": return status(dir);
     case "review": return review(dir, !!o.json);
     default: die(`Unknown command "${cmd}".\n\n${HELP}`);
   }
+}
+
+/** Which project a command acts on (see HELP). */
+async function resolveProject(ref = process.env.KRETSA_PROJECT): Promise<string> {
+  if (ref) {
+    if (await isProjectDir(resolve(ref))) return resolve(ref);
+    const info = await workspaceInfo(await workspaceRoot());
+    const m = matchProject(info, ref);
+    if (typeof m === "string") die(m);
+    return projectDirOf(info.root, m.id);
+  }
+  const inside = await findProjectDir();
+  if (inside) return inside;
+  const info = await workspaceInfo(await workspaceRoot());
+  if (info.current) return projectDirOf(info.root, info.current);
+  die(`No KiCad project found in ${info.root} (pass a project, cd into one, or set KRETSA_PROJECT).`);
+}
+
+async function projects(json: boolean) {
+  const info = await workspaceInfo(await workspaceRoot());
+  if (json) return void process.stdout.write(JSON.stringify(info, null, 1) + "\n");
+  const lines = [`# Projects in ${info.root}`, ""];
+  if (!info.projects.length) lines.push("None found (no .kicad_pro files).");
+  else {
+    lines.push("| | id | name | sch | pcb | open comments | modified |", "|---|---|---|---|---|---|---|");
+    for (const p of info.projects) {
+      lines.push(`| ${p.id === info.current ? "*" : ""} | ${p.id} | ${p.name} | ${p.hasSch ? "✓" : ""} | ${p.hasPcb ? "✓" : ""} | ${p.open || ""} | ${p.modified.slice(0, 16).replace("T", " ")} |`);
+    }
+  }
+  process.stdout.write(lines.join("\n") + "\n");
+}
+
+async function use(ref?: string) {
+  if (!ref) die("Usage: kretsa use <project>  (see `kretsa projects`)");
+  const info = await workspaceInfo(await workspaceRoot());
+  const m = matchProject(info, ref);
+  if (typeof m === "string") die(m);
+  await writeWorkspaceState(info.root, { current: m.id });
+  process.stdout.write(`Current project: ${m.id} (${m.name}). An open viewer switches to it.\n`);
 }
 
 function die(msg: string): never {
@@ -69,7 +118,7 @@ function die(msg: string): never {
 
 // ---------------------------------------------------------------------------------------------
 
-async function serve(dir: string, o: { port?: string; host?: string; dev?: boolean }) {
+async function serve(root: string, o: { port?: string; host?: string; dev?: boolean }) {
   const port = Number(o.port ?? process.env.KRETSA_PORT ?? 7777);
   const host = o.host ?? process.env.KRETSA_HOST ?? "0.0.0.0";
   const web = join(ROOT, "web");
@@ -79,7 +128,7 @@ async function serve(dir: string, o: { port?: string; host?: string; dev?: boole
     if (b.exitCode !== 0) die("Frontend build failed.");
   }
   const { startServer } = await import("@kretsa/server");
-  await startServer({ projectDir: dir, port, host });
+  await startServer({ root, port, host });
   if (o.dev) {
     const vite = [join(web, "node_modules/.bin/vite"), join(ROOT, "node_modules/.bin/vite")].find(existsSync);
     if (!vite) die("vite not found; run `bun install`.");

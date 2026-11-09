@@ -5,3 +5,4 @@ export * from "./project";
 export * from "./kicad";
 export * from "./review";
 export * from "./check";
+export * from "./workspace";

@@ -13,10 +13,13 @@ function hash(data: string | Uint8Array): string {
   return new Bun.CryptoHasher("sha256").update(data).digest("hex").slice(0, 16);
 }
 
-async function walk(dir: string, out: string[] = []): Promise<string[]> {
-  for (const e of await readdir(dir, { withFileTypes: true })) {
+async function walk(dir: string, out: string[] = [], top = true): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  // A subfolder with its own .kicad_pro is a separate (nested) project, not part of this one.
+  if (!top && entries.some((e) => e.isFile() && e.name.endsWith(".kicad_pro"))) return out;
+  for (const e of entries) {
     if (e.isDirectory()) {
-      if (!SKIP_DIRS.has(e.name) && !e.name.endsWith("-backups")) await walk(join(dir, e.name), out);
+      if (!SKIP_DIRS.has(e.name) && !e.name.endsWith("-backups")) await walk(join(dir, e.name), out, false);
     } else if (Object.keys(KINDS).some((ext) => e.name.endsWith(ext))) {
       out.push(join(dir, e.name));
     }

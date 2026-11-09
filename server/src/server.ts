@@ -1,17 +1,19 @@
 // HTTP + WebSocket backend for the web UI. A thin layer over @kretsa/core; started by `kretsa serve`.
 
-import { watch } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { watch as watchFs, type FSWatcher } from "node:fs";
 import {
-  detectKicadCli, exportGlb, exportNetlist, migrateLegacyDir, ReviewStore, rootSchematic, runChecks, safeJoin, scanProject,
+  detectKicadCli, exportGlb, exportNetlist, migrateLegacyDir, projectDirOf, readWorkspaceState, ReviewStore, rootSchematic,
+  runChecks, safeJoin, scanProject, workspaceInfo, writeWorkspaceState,
 } from "@kretsa/core";
 import type { CommentPatch, NewComment, ProjectInfo, ServerMessage } from "../../shared/review";
 
 const ROOT = resolve(import.meta.dir, "../..");
 
 export interface ServeOptions {
-  projectDir: string;
+  /** A workspace (folder with one or more KiCad projects) or a single project folder. */
+  root: string;
   port?: number; // default 7777
   /** 0.0.0.0 (default) makes it reachable on the LAN. There is no auth: trusted networks only. */
   host?: string;
@@ -20,15 +22,36 @@ export interface ServeOptions {
 }
 
 export async function startServer(opts: ServeOptions) {
-  const projectDir = resolve(opts.projectDir);
+  const root = resolve(opts.root);
   const port = opts.port ?? 7777;
   const host = opts.host ?? "0.0.0.0";
   const webDist = opts.webDist ?? join(ROOT, "web/dist");
-
-  if (await migrateLegacyDir(projectDir)) console.log(`migrated ${projectDir}/.wiber -> .kretsa`);
   const kicadCli = await detectKicadCli();
-  const review = new ReviewStore(projectDir);
-  let project: ProjectInfo = await scanProject(projectDir, kicadCli);
+
+  // The open project. Everything below reads these, and switchProject() replaces them.
+  let currentId: string | null = null;
+  let projectDir = root;
+  let review = new ReviewStore(root);
+  let project: ProjectInfo = { name: "", dir: root, rev: "", files: [], kicadCli };
+  let projectWatcher: FSWatcher | null = null;
+
+  async function switchProject(id: string | null, opts: { persist?: boolean; announce?: boolean } = {}) {
+    const info = await workspaceInfo(root);
+    const target = info.projects.find((p) => p.id === id) ?? info.projects.find((p) => p.id === info.current);
+    if (!target) {
+      currentId = null;
+      return;
+    }
+    projectDir = projectDirOf(root, target.id);
+    if (await migrateLegacyDir(projectDir)) console.log(`migrated ${projectDir}/.wiber -> .kretsa`);
+    currentId = target.id;
+    review = new ReviewStore(projectDir);
+    project = await scanProject(projectDir, kicadCli);
+    watchProject();
+    if (opts.persist) await writeWorkspaceState(root, { current: currentId });
+    console.log(`[project] ${currentId} (${project.files.length} files)`);
+    if (opts.announce) broadcast({ type: "project", id: currentId });
+  }
 
   const json = (data: unknown, status = 200) => Response.json(data, { status });
 
@@ -41,6 +64,20 @@ export async function startServer(opts: ServeOptions) {
 
       if (path === "/ws") {
         return srv.upgrade(req) ? undefined : new Response("upgrade failed", { status: 400 });
+      }
+
+      if (path === "/api/workspace" && req.method === "GET") return json({ ...(await workspaceInfo(root)), current: currentId });
+
+      if (path === "/api/workspace/current" && req.method === "POST") {
+        const { id } = (await req.json()) as { id: string };
+        const info = await workspaceInfo(root);
+        if (!info.projects.some((p) => p.id === id)) return json({ error: `no project ${id}` }, 404);
+        await switchProject(id, { persist: true, announce: true });
+        return json({ current: currentId });
+      }
+
+      if (!currentId && path.startsWith("/api/") && path !== "/api/workspace") {
+        return json({ error: `No KiCad project in ${root}` }, 404);
       }
 
       if (path === "/api/project") return json(project);
@@ -126,17 +163,20 @@ export async function startServer(opts: ServeOptions) {
     server.publish("all", JSON.stringify(msg));
   }
 
-  // Watch the project: design file changes -> rescan + reload; external review.json edits (the agent) -> refresh.
+  // Watch the open project: design file changes -> rescan + reload; external review.json edits (the agent) -> refresh.
   let timer: Timer | undefined;
   let reviewChanged = false;
-  const watcher = watch(projectDir, { recursive: true }, (_ev, name) => {
-    if (!name) return;
-    const n = name.toString();
-    if (n === ".kretsa/review.json") reviewChanged = true;
-    else if (!/\.kicad_(pro|sch|pcb)$/.test(n) || n.startsWith(".kretsa/")) return;
-    clearTimeout(timer);
-    timer = setTimeout(onChange, 300);
-  });
+  function watchProject() {
+    projectWatcher?.close();
+    projectWatcher = watchFs(projectDir, { recursive: true }, (_ev, name) => {
+      if (!name) return;
+      const n = name.toString();
+      if (n === ".kretsa/review.json") reviewChanged = true;
+      else if (!/\.kicad_(pro|sch|pcb)$/.test(n) || n.startsWith(".kretsa/")) return;
+      clearTimeout(timer);
+      timer = setTimeout(onChange, 300);
+    });
+  }
 
   async function onChange() {
     if (reviewChanged) {
@@ -153,12 +193,24 @@ export async function startServer(opts: ServeOptions) {
     broadcast({ type: "reload", rev: next.rev, changed });
   }
 
+  // The agent switches projects with `kretsa use`, which writes <root>/.kretsa/workspace.json: follow it.
+  const wsDir = join(root, ".kretsa");
+  await mkdir(wsDir, { recursive: true });
+  const workspaceWatcher = watchFs(wsDir, async (_ev, name) => {
+    if (name?.toString() !== "workspace.json") return;
+    const { current } = await readWorkspaceState(root);
+    if (current && current !== currentId) await switchProject(current, { announce: true });
+  });
+
+  await switchProject((await readWorkspaceState(root)).current);
+
   console.log(`kretsa server  http://localhost:${port}`);
-  console.log(`  project: ${projectDir} (${project.files.length} files)`);
+  console.log(`  workspace: ${root}`);
+  console.log(`  project: ${currentId ?? "(none found)"}`);
   console.log(`  kicad-cli: ${kicadCli ?? "NOT FOUND (3D and checks disabled)"}`);
 
   return {
     server,
-    stop() { watcher.close(); server.stop(true); },
+    stop() { projectWatcher?.close(); workspaceWatcher.close(); server.stop(true); },
   };
 }
