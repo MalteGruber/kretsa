@@ -11,6 +11,7 @@
 //   app.project.pages(), project.set_active_page(page)
 
 import type { Anchor, ProjectInfo } from "../../shared/review";
+import { applyDarkTheme } from "./kicad-theme";
 import { buildSheetGroups, groupAt, groupNodes, type NetIndex, type NetSel, type SchGroup } from "./nets";
 
 let loaded: Promise<boolean> | null = null;
@@ -141,6 +142,7 @@ export class KiCanvasView {
     // The viewer is a plain EventTarget (not a DOM node), so its events never reach `document`.
     if (v && v !== this.listenedViewer) {
       this.listenedViewer = v;
+      applyDarkTheme(v, this.kind);
       v.addEventListener("kicanvas:select", (e: CustomEvent) => { if (!this.quiet) this.onSelect?.(e.detail?.item ?? null); });
       // Replace KiCanvas' click handling: it only picks symbols (sch) and pops a chooser menu for
       // footprint-vs-net (pcb), and ignores wires, labels and zones.
@@ -399,6 +401,12 @@ export class KiCanvasView {
     return true;
   }
 
+  /** Frame a document-mm box [x1, y1, x2, y2]. */
+  zoomToMm(b: [number, number, number, number]) {
+    const BBox = this.viewer?.viewport?.camera?.bbox?.constructor;
+    if (BBox) this.zoomToBoxes([new BBox(b[0], b[1], b[2] - b[0], b[3] - b[1])]);
+  }
+
   private zoomToBoxes(boxes: any[]) {
     const v = this.viewer;
     if (!v || !boxes.length) return;
@@ -569,6 +577,44 @@ export class KiCanvasView {
     cam.center.set(x, y);
     v.draw();
   }
+  /** Bounding boxes of all parts on the displayed sheet / board (for ink summaries). */
+  refBoxes(): { ref: string; bbox: [number, number, number, number] }[] {
+    const v = this.viewer;
+    if (!v) return [];
+    const out: { ref: string; bbox: [number, number, number, number] }[] = [];
+    const items: any[] = this.kind === "sch" ? [...(v.schematic?.symbols?.values() ?? [])] : [...(v.board?.footprints ?? [])];
+    for (const it of items) {
+      let ref = "";
+      try { ref = it.reference; } catch {}
+      if (!ref || ref.startsWith("#")) continue;
+      let bb: any = null;
+      try { bb = this.kind === "sch" ? v.layers.query_item_bboxes(it).next().value : it.bbox; } catch {}
+      if (bb && Number.isFinite(bb.w)) out.push({ ref, bbox: [bb.x, bb.y, bb.x + bb.w, bb.y + bb.h] });
+    }
+    return out;
+  }
+
+  mmPerPx(): number { return this.pxToMm(1); }
+
+  /**
+   * Copy of the canvas as currently rendered (CSS px are scaled by `scale`). The PCB canvas is WebGL
+   * without preserveDrawingBuffer, so render synchronously and copy within the same task.
+   */
+  capture(): { canvas: HTMLCanvasElement; scale: number } | null {
+    const v = this.viewer;
+    const src: HTMLCanvasElement | undefined = v?.canvas;
+    if (!src?.width) return null;
+    try { v.on_draw(); } catch {}
+    const out = document.createElement("canvas");
+    out.width = src.width;
+    out.height = src.height;
+    const ctx = out.getContext("2d")!;
+    ctx.fillStyle = "#1f1f1f";
+    ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(src, 0, 0);
+    return { canvas: out, scale: src.width / Math.max(1, src.clientWidth) };
+  }
+
   /** Position of a symbol/footprint by ref, in document mm. */
   positionOf(ref: string): [number, number] | null {
     const v = this.viewer;

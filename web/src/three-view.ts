@@ -35,7 +35,7 @@ export async function mountThree(
   const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(devicePixelRatio);
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x2a2f38);
+  scene.background = new THREE.Color(0x1f1f1f);
   scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 2));
   const sun = new THREE.DirectionalLight(0xffffff, 2);
   sun.position.set(1, 2, 1.5);

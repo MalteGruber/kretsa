@@ -1,4 +1,5 @@
-import type { Anchor, Comment, ProjectInfo, Review, View } from "../../shared/review";
+import type { Anchor, Comment, InkShape, ProjectInfo, Review, View } from "../../shared/review";
+import { bboxOf, finishShape, inkMarkup, paintInk, type Tool } from "./ink";
 import { api, connect } from "./api";
 import { itemToAnchor, itemToComponent, KiCanvasView, type Component } from "./kicanvas-view";
 import { NetIndex, type NetSel } from "./nets";
@@ -25,6 +26,8 @@ interface Pane {
   kc: KiCanvasView | null;
   three: ThreeView | null;
   pinEls: Map<string, HTMLElement>;
+  ink: SVGSVGElement;
+  inkKey: string;
 }
 
 const state = {
@@ -50,6 +53,13 @@ const state = {
   filter: "active" as "active" | "all",
   wsUp: false,
   mountSeq: 0,
+  /** Drawing tool while in draw mode (D), else null. */
+  inkTool: null as Tool | null,
+  /** Shapes drawn for the comment being composed; tied to one pane kind + sheet. */
+  draftInk: null as { kind: View; sheet?: string; shapes: InkShape[] } | null,
+  /** Stroke in progress (document mm). */
+  liveInk: null as { kind: View; tool: Tool; pts: [number, number][] } | null,
+  inkVersion: 0,
 };
 
 // =====================================================================================
@@ -62,6 +72,7 @@ function createPane(kind: View): Pane {
   el.dataset.kind = kind;
   el.innerHTML = `
     <div class="viewer"></div>
+    <svg class="inklayer"></svg>
     <div class="pins"></div>
     <div class="catcher" hidden></div>
     <div class="coords"></div>
@@ -72,6 +83,7 @@ function createPane(kind: View): Pane {
     viewer: $(".viewer", el), pins: $(".pins", el), catcher: $(".catcher", el),
     coords: $(".coords", el), layerbar: $(".layerbar", el),
     kc: null, three: null, pinEls: new Map(),
+    ink: el.querySelector<SVGSVGElement>(".inklayer")!, inkKey: "",
   };
   el.addEventListener("pointerdown", () => setFocus(pane), true);
   el.addEventListener("pointermove", (e) => {
@@ -80,7 +92,9 @@ function createPane(kind: View): Pane {
     pane.coords.textContent = w ? `X ${w[0].toFixed(2)}  Y ${w[1].toFixed(2)} mm` : "";
   });
   el.addEventListener("pointerleave", () => (pane.coords.textContent = ""));
+  bindInk(pane);
   pane.catcher.addEventListener("click", (e) => {
+    if (!state.commentMode) return;
     const r = pane.viewer.getBoundingClientRect();
     const w = pane.kc?.screenToWorld(e.clientX - r.left, e.clientY - r.top);
     setCommentMode(false);
@@ -289,9 +303,141 @@ function onThreePick(pane: Pane, a: Anchor | null) {
 
 function setCommentMode(on: boolean) {
   state.commentMode = on;
-  $("#toolbar [data-act=comment]").classList.toggle("active", on);
-  // 2D: an overlay captures the click; 3D: the three view's own pick handler is used.
-  for (const p of state.panes) p.catcher.hidden = !on || p.kind === "3d";
+  if (on) state.inkTool = null;
+  syncCatchers();
+}
+
+/** Draw mode: the catcher overlay takes pointer input on sch/pcb panes. null leaves draw mode. */
+function setInkTool(tool: Tool | null) {
+  state.inkTool = tool;
+  if (tool) state.commentMode = false;
+  syncCatchers();
+}
+
+function syncCatchers() {
+  const on = state.commentMode || !!state.inkTool;
+  $("#toolbar [data-act=comment]").classList.toggle("active", state.commentMode);
+  $("#toolbar [data-act=draw]").classList.toggle("active", !!state.inkTool);
+  $("#inkbar").hidden = !state.inkTool;
+  $$("#inkbar [data-tool]").forEach((b) => b.classList.toggle("active", b.dataset.tool === state.inkTool));
+  // 2D: an overlay captures input; 3D: the three view's own pick handler is used (no drawing in 3D).
+  for (const p of state.panes) {
+    p.catcher.hidden = !on || p.kind === "3d";
+    p.catcher.classList.toggle("drawing", !!state.inkTool);
+  }
+}
+
+function bindInk(pane: Pane) {
+  const c = pane.catcher;
+  const toWorld = (e: PointerEvent) => {
+    const r = pane.viewer.getBoundingClientRect();
+    return pane.kc?.screenToWorld(e.clientX - r.left, e.clientY - r.top) ?? null;
+  };
+  c.addEventListener("pointerdown", (e) => {
+    if (!state.inkTool || !pane.kc || e.button > 0) return;
+    const w = toWorld(e);
+    if (!w) return;
+    c.setPointerCapture(e.pointerId);
+    state.liveInk = { kind: pane.kind, tool: state.inkTool, pts: [w] };
+    state.inkVersion++;
+    e.preventDefault();
+  });
+  c.addEventListener("pointermove", (e) => {
+    const live = state.liveInk;
+    if (!live || live.kind !== pane.kind) return;
+    const w = toWorld(e);
+    if (!w) return;
+    if (live.tool === "pen") live.pts.push(w);
+    else live.pts[1] = w;
+    state.inkVersion++;
+  });
+  const end = () => {
+    const live = state.liveInk;
+    if (!live || live.kind !== pane.kind || !pane.kc) return;
+    state.liveInk = null;
+    const shape = finishShape(live.tool, live.pts, pane.kc.refBoxes(), pane.kc.mmPerPx());
+    if (shape) {
+      const sheet = sheetOf(pane);
+      if (!state.draftInk || state.draftInk.kind !== pane.kind || state.draftInk.sheet !== sheet) {
+        state.draftInk = { kind: pane.kind, sheet, shapes: [] };
+      }
+      state.draftInk.shapes.push(shape);
+      renderDraftAnchors();
+    }
+    state.inkVersion++;
+  };
+  c.addEventListener("pointerup", end);
+  c.addEventListener("pointercancel", () => { state.liveInk = null; state.inkVersion++; });
+  // Keep wheel zoom working while the overlay is up.
+  c.addEventListener("wheel", (e) => {
+    const canvas: HTMLCanvasElement | undefined = pane.kc?.viewer?.canvas;
+    if (canvas) { e.preventDefault(); canvas.dispatchEvent(new WheelEvent("wheel", e)); }
+  }, { passive: false });
+}
+
+function inkUndo() {
+  state.draftInk?.shapes.pop();
+  if (!state.draftInk?.shapes.length) state.draftInk = null;
+  state.inkVersion++;
+  renderDraftAnchors();
+}
+function inkClear() {
+  state.draftInk = null;
+  state.inkVersion++;
+  renderDraftAnchors();
+}
+
+/** Shapes to show on a pane: the draft, the stroke in progress, and the active comment's drawing. */
+function paneInk(pane: Pane): { shapes: InkShape[]; opacity: number }[] {
+  const out: { shapes: InkShape[]; opacity: number }[] = [];
+  const active = state.review.comments.find((c) => c.id === state.activeComment);
+  if (active?.ink_shapes?.length && commentInPane(pane, active)) out.push({ shapes: active.ink_shapes, opacity: 0.85 });
+  if (state.draftInk?.kind === pane.kind && state.draftInk.sheet === sheetOf(pane)) out.push({ shapes: state.draftInk.shapes, opacity: 1 });
+  const live = state.liveInk;
+  if (live?.kind === pane.kind && live.pts.length > 1) {
+    out.push({ shapes: [{ tool: live.tool, bbox_mm: [0, 0, 0, 0], pts_mm: live.tool === "pen" ? live.pts : [live.pts[0]!, live.pts.at(-1)!] }], opacity: 1 });
+  }
+  return out;
+}
+
+function updatePaneInk(pane: Pane) {
+  const kc = pane.kc;
+  const cam = kc?.viewer?.viewport?.camera;
+  const layers = cam ? paneInk(pane) : [];
+  const key = layers.length && cam
+    ? `${cam.center.x},${cam.center.y},${cam.zoom},${pane.viewer.clientWidth},${pane.viewer.clientHeight},${state.inkVersion},${state.activeComment}`
+    : "";
+  if (key === pane.inkKey) return;
+  pane.inkKey = key;
+  const toScreen = (p: [number, number]) => kc!.worldToScreen(p[0], p[1]);
+  pane.ink.innerHTML = key ? layers.map((l) => inkMarkup(l.shapes, toScreen, { opacity: l.opacity })).join("") : "";
+}
+
+/**
+ * PNG of the pane cropped around the drawing (or the dropped pin), with the ink burned in,
+ * so the AI can *see* what was marked.
+ */
+function inkSnapshot(pane: Pane, shapes: InkShape[], point?: [number, number]): string | undefined {
+  const kc = pane.kc;
+  const cap = kc?.capture();
+  if (!kc || !cap) return undefined;
+  const { canvas, scale } = cap;
+  const toPx = (p: [number, number]) => { const s = kc.worldToScreen(p[0], p[1]); return s ? [s[0] * scale, s[1] * scale] as [number, number] : null; };
+  const ctx = canvas.getContext("2d")!;
+  paintInk(ctx, shapes, toPx, 3 * scale);
+  const pts = [...shapes.flatMap((s) => s.pts_mm), ...(point ? [point] : [])].map(toPx).filter((p): p is [number, number] => !!p);
+  if (!pts.length) return undefined;
+  const [x1, y1, x2, y2] = bboxOf(pts);
+  const m = 120 * scale;
+  const cx = Math.max(0, x1 - m), cy = Math.max(0, y1 - m);
+  const cw = Math.min(canvas.width, x2 + m) - cx, ch = Math.min(canvas.height, y2 + m) - cy;
+  if (cw <= 0 || ch <= 0) return undefined;
+  const out = document.createElement("canvas");
+  const k = Math.min(1, 1600 / Math.max(cw, ch)); // keep the PNG reasonably small
+  out.width = Math.round(cw * k);
+  out.height = Math.round(ch * k);
+  out.getContext("2d")!.drawImage(canvas, cx, cy, cw, ch, 0, 0, out.width, out.height);
+  return out.toDataURL("image/png");
 }
 
 function focusComposer() {
@@ -335,7 +481,7 @@ function visibleComments(): Comment[] {
 
 function updatePins() {
   requestAnimationFrame(updatePins);
-  for (const pane of state.panes) updatePanePins(pane);
+  for (const pane of state.panes) { updatePanePins(pane); updatePaneInk(pane); }
 }
 
 function updatePanePins(pane: Pane) {
@@ -394,6 +540,11 @@ function activateComment(id: string, opts: { fromPin?: boolean } = {}) {
     const pane = paneOf(c.view)!;
     setFocus(pane);
     if (c.sheet && pane.kc && sheetOf(pane) !== c.sheet) { pane.kc.setPage(c.sheet); await pane.kc.waitViewer(); }
+    if (c.ink_shapes?.length && pane.kc) {
+      const xs = c.ink_shapes.flatMap((s) => [s.bbox_mm[0], s.bbox_mm[2]]), ys = c.ink_shapes.flatMap((s) => [s.bbox_mm[1], s.bbox_mm[3]]);
+      pane.kc.zoomToMm([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
+      return;
+    }
     const sym = c.anchors.find((a) => a.kind === "symbol" || a.kind === "pad") as { ref: string } | undefined;
     if (sym) {
       await selectRef(sym.ref, { zoom: true });
@@ -423,7 +574,14 @@ function addAnchor(a: Anchor) {
 }
 
 function renderDraftAnchors() {
+  const n = state.draftInk?.shapes.length ?? 0;
+  const inkChip = document.createElement("span");
+  inkChip.className = "chip ink";
+  inkChip.textContent = `✎ drawing (${n})`;
+  inkChip.title = "Remove drawing";
+  inkChip.onclick = inkClear;
   $("#anchors").replaceChildren(
+    ...(n ? [inkChip] : []),
     ...state.draftAnchors.map((a, i) => {
       const chip = document.createElement("span");
       chip.className = "chip";
@@ -455,19 +613,35 @@ async function submitComment(form: HTMLFormElement) {
   if (!text) return;
   const anchors = [...state.draftAnchors, ...parseExtraAnchors(String(data.get("extra") ?? ""))];
   // A dropped pin decides which pane the comment belongs to; otherwise the focused pane.
-  const pane = (state.draftPoint && paneOf(state.draftPoint.kind)) || state.focus;
+  const inkPane = state.draftInk ? paneOf(state.draftInk.kind) : undefined;
+  const pane = inkPane || (state.draftPoint && paneOf(state.draftPoint.kind)) || state.focus;
+  const shapes = inkPane && state.draftInk ? state.draftInk.shapes : [];
+  // Parts the drawing refers to become anchors too, so the agent gets them without reading geometry.
+  for (const s of shapes) {
+    for (const ref of [...(s.covers ?? []), s.from_ref, s.to_ref]) {
+      if (ref && !anchors.some((a) => a.kind === "symbol" && a.ref === ref)) anchors.push({ kind: "symbol", ref });
+    }
+  }
+  if (shapes.length) {
+    const bb = bboxOf(shapes.flatMap((s) => [[s.bbox_mm[0], s.bbox_mm[1]], [s.bbox_mm[2], s.bbox_mm[3]]] as [number, number][]));
+    anchors.push({ kind: "area", bbox_mm: bb.map((n) => +n.toFixed(2)) as [number, number, number, number] });
+  }
+  const point = state.draftPoint?.kind === pane?.kind ? state.draftPoint?.at : undefined;
   const c = await api.addComment({
     view: pane?.kind ?? focusKind(),
     file: fileOf(pane),
     sheet: sheetOf(pane),
     anchors,
     text,
-    // TODO: 2D snapshots (KiCanvas canvas lives in shadow DOM, needs preserveDrawingBuffer or a re-render)
-    snapshotPng: pane?.three?.snapshot(),
+    ...(shapes.length && { ink_shapes: shapes }),
+    snapshotPng: pane?.three?.snapshot() ?? (pane && (shapes.length || point) ? inkSnapshot(pane, shapes, point) : undefined),
   });
   form.reset();
   state.draftAnchors = [];
   state.draftPoint = null;
+  state.draftInk = null;
+  state.inkVersion++;
+  setInkTool(null);
   renderDraftAnchors();
   state.activeComment = c.id;
   await refreshReview();
@@ -501,6 +675,11 @@ function renderComments() {
   $("#comment-list").replaceChildren(...visibleComments().slice().reverse().map(renderComment));
 }
 
+function describeShape(s: InkShape): string {
+  if (s.tool === "arrow") return `arrow ${s.from_ref ?? "here"} → ${s.to_ref ?? "there"}`;
+  return `${s.tool === "rect" ? "box" : "mark"}${s.covers?.length ? ` around ${s.covers.join(", ")}` : ""}`;
+}
+
 function renderComment(c: Comment): HTMLLIElement {
   const li = document.createElement("li");
   const closed = c.status === "resolved" || c.status === "wontfix";
@@ -516,6 +695,7 @@ function renderComment(c: Comment): HTMLLIElement {
       <span class="status-pill ${c.status}">${c.status}</span>
     </div>
     <div class="ctext">${esc(c.text)}</div>
+    ${c.ink_shapes?.length ? `<div class="cink">${c.ink_shapes.map((s) => `<div>✎ ${esc(describeShape(s))}</div>`).join("")}</div>` : ""}
     ${c.anchors.length ? `<div class="canchors">${c.anchors.map((a) => `<span class="tag">${esc(anchorLabel(a))}</span>`).join("")}</div>` : ""}
     ${stale ? `<div class="stale">● design changed since this comment</div>` : ""}
     ${c.snapshot ? `<img src="/wiber/${esc(c.snapshot)}" alt="snapshot" />` : ""}
@@ -717,9 +897,14 @@ function bindUi() {
     }
     if (a === "zoomsel" && state.selectedNet) pane?.kc?.selectNet(state.selectedNet, true);
     if (a === "comment") setCommentMode(!state.commentMode);
+    if (a === "draw") setInkTool(state.inkTool ? null : "pen");
     if (a === "left") $("#left").hidden = !$("#left").hidden;
   };
   $$("#toolbar [data-act]").forEach((b) => (b.onclick = () => act(b.dataset.act!)));
+  $$<HTMLButtonElement>("#inkbar [data-tool]").forEach((b) => (b.onclick = () => setInkTool(b.dataset.tool as Tool)));
+  $("#inkbar [data-ink=undo]").onclick = inkUndo;
+  $("#inkbar [data-ink=clear]").onclick = inkClear;
+  $("#inkbar [data-ink=done]").onclick = () => { setInkTool(null); if (state.draftInk) focusComposer(); };
 
   const form = $<HTMLFormElement>("#composer");
   form.onsubmit = (e) => { e.preventDefault(); submitComment(form); };
@@ -728,14 +913,17 @@ function bindUi() {
   });
 
   document.addEventListener("keydown", (e) => {
-    if ((e.target as HTMLElement).closest("input, textarea") || e.ctrlKey || e.metaKey || e.altKey) return;
+    if ((e.target as HTMLElement).closest("input, textarea")) return;
+    if (state.inkTool && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); return inkUndo(); }
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key.toLowerCase();
     if (k === "c") act("comment");
+    else if (k === "d") act("draw");
     else if (k === "f") act("fit");
     else if (k === "z") act("zoomsel");
     else if (k === "[") act("left");
     else if (k >= "1" && k <= "4") showMode(MODES[Number(k) - 1]!);
-    else if (k === "escape") { setCommentMode(false); state.activeComment = null; renderComments(); }
+    else if (k === "escape") { setCommentMode(false); setInkTool(null); state.activeComment = null; renderComments(); }
   });
 }
 
