@@ -155,6 +155,14 @@ view switches. The **Sch + PCB** mode (`#split`) runs two KiCanvas viewers side 
 zooms in the other, switching schematic sheets if needed (`KiCanvasView.selectRef`). In 3D, the selected part is tinted and
 framed (`ThreeView.highlight`). Components-list clicks, comment cards and 3D picks all go through `selectRef()`.
 
+**Net cross-probing** (`selectNet()` in `main.ts`, `web/src/nets.ts`): KiCanvas has no schematic connectivity and only picks
+symbols, so `buildSheetGroups` unions wires, junctions, labels and symbol pins of the displayed sheet geometrically and names each
+group from the kicad-cli netlist (`GET /api/netlist`) by pin votes. Nets are matched between sch and pcb **by shared pins**
+(`U3.4`), with the name as fallback. Click a wire or label (sch), or a track, via or zone fill (pcb) to select a net. A second click on a pad of the
+already-selected footprint selects that pad's net. Sch highlight is an SVG overlay (`svg.netlayer`). PCB uses KiCanvas' native
+`highlight_net`, which shares the overlay layer with the selection box. 3D tints every part on the net. We replace `viewer.on_pick`
+on both viewers. Pads are not in KiCanvas' bbox index, so they are hit-tested by geometry (`padAt`).
+
 ### KiCanvas integration gotchas (verified)
 
 - Use `controls="basic"`. With `"none"`, KiCanvas **disables all interaction** (no pan, zoom or select).
@@ -173,7 +181,7 @@ framed (`ThreeView.highlight`). Components-list clicks, comment cards and 3D pic
 
 ## API
 
-`GET /api/project` · `GET /project/<file>` (raw) · `GET /api/3d.glb` · `GET /api/review` ·
+`GET /api/project` · `GET /api/netlist` · `GET /project/<file>` (raw) · `GET /api/3d.glb` · `GET /api/review` ·
 `POST /api/review/comments` · `PATCH /api/review/comments/:id` `{status?, reply?}` · `GET /wiber/<path>` ·
 `WS /ws` → `{type:"reload", rev, changed[]}` | `{type:"review"}`
 
@@ -182,6 +190,5 @@ framed (`ThreeView.highlight`). Components-list clicks, comment cards and 3D pic
 - Annotation overlay: rectangles and freehand ink in document mm, for both sch and pcb. The transforms are
   `KiCanvasView.worldToScreen/screenToWorld`, which the pins overlay already uses.
 - 2D snapshots. KiCanvas's canvas is inside shadow DOM without `preserveDrawingBuffer`.
-- Pad selection. Schematic net selection (PCB nets work).
 - KiCanvas's selection overlay is opaque in the "kicad" theme and hides the selected symbol. Tune `selection_color`.
 - Diff overlay: what changed since the `design_rev` of a comment.

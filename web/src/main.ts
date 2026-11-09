@@ -1,6 +1,7 @@
 import type { Anchor, Comment, ProjectInfo, Review, View } from "../../shared/review";
 import { api, connect } from "./api";
 import { itemToAnchor, itemToComponent, KiCanvasView, type Component } from "./kicanvas-view";
+import { NetIndex, type NetSel } from "./nets";
 import type { ThreeView } from "./three-view";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector<T>(sel)!;
@@ -35,6 +36,11 @@ const state = {
   /** Cross-probe selection, shared by all panes and preserved across view switches. */
   selectedRef: null as string | null,
   selected: null as Component | null,
+  /** Cross-probed net (mutually exclusive with selectedRef). Name as seen by the pane that picked it. */
+  selectedNet: null as NetSel | null,
+  /** Schematic netlist from kicad-cli, for net cross-probing. Reloaded with the project rev. */
+  nets: null as NetIndex | null,
+  netsRev: "",
   /** Component data per document kind, so 3D picks can show schematic/PCB properties. */
   comps: {} as Partial<Record<"sch" | "pcb", Component[]>>,
   draftAnchors: [] as Anchor[],
@@ -137,10 +143,13 @@ async function mountPane(pane: Pane, seq: number, saved?: CamState) {
     if (seq !== state.mountSeq) return tv?.dispose();
     pane.three = tv;
     if (state.selectedRef) tv?.highlight(state.selectedRef, !saved);
+    else if (state.selectedNet) tv?.highlight(netRefs(state.selectedNet));
     return;
   }
   const kc = new KiCanvasView(pane.viewer, pane.kind);
   kc.onSelect = (item) => onKiCanvasSelect(pane, item);
+  kc.onNet = (sel) => onNetPick(pane, sel);
+  kc.nets = () => state.nets;
   pane.kc = kc;
   if (!(await kc.mount(state.project)) || seq !== state.mountSeq) return;
   if (saved?.page) { kc.setPage(saved.page); await kc.waitViewer(); }
@@ -150,6 +159,7 @@ async function mountPane(pane: Pane, seq: number, saved?: CamState) {
   state.comps[pane.kind as "sch" | "pcb"] = kc.components();
   if (saved) restoreCamera(pane, saved);
   if (state.selectedRef) await kc.selectRef(state.selectedRef, !saved);
+  else if (state.selectedNet) await kc.selectNet(state.selectedNet, !saved);
   renderLayers(pane);
 }
 
@@ -202,6 +212,7 @@ function enrich(ref: string, base?: Component | null): Component {
  */
 async function selectRef(ref: string | null, opts: { origin?: Pane; zoom?: boolean; base?: Component | null } = {}) {
   state.selectedRef = ref;
+  state.selectedNet = null;
   state.selected = ref ? enrich(ref, opts.base) : null;
   renderProps();
   renderComponents();
@@ -213,6 +224,40 @@ async function selectRef(ref: string | null, opts: { origin?: Pane; zoom?: boole
   }));
 }
 
+/** Refdes of the parts on a net (for tinting them in 3D). */
+const netRefs = (sel: NetSel) => [...new Set(sel.nodes.map((n) => n.slice(0, n.lastIndexOf("."))))];
+
+/** Select a net everywhere: schematic wires/labels, PCB copper (tracks, vias, pads, zones), parts in 3D. */
+async function selectNet(sel: NetSel | null, opts: { origin?: Pane; zoom?: boolean } = {}) {
+  if (!sel) return selectRef(null, opts);
+  state.selectedRef = null;
+  state.selectedNet = sel;
+  state.selected = { isNet: true, ref: sel.name, value: "Net", footprint: "", props: [] };
+  renderProps();
+  renderComponents();
+  showRightTab("props");
+  const zoom = opts.zoom ?? state.mode === "split";
+  await Promise.all(state.panes.filter((p) => p !== opts.origin).map(async (p) => {
+    if (p.kc) await p.kc.selectNet(sel, zoom);
+    p.three?.highlight(netRefs(sel));
+  }));
+}
+
+function onNetPick(pane: Pane, sel: NetSel) {
+  const composing = document.activeElement === $("#composer textarea") || $<HTMLTextAreaElement>("#composer textarea").value.trim();
+  if (composing) addAnchor({ kind: "net", name: sel.name });
+  setFocus(pane);
+  setTimeout(() => selectNet(sel, { origin: pane }), 0);
+}
+
+async function loadNetlist() {
+  const rev = state.project?.rev ?? "";
+  if (!state.project?.files.some((f) => f.kind === "sch") || state.netsRev === rev) return;
+  state.netsRev = rev;
+  try { state.nets = new NetIndex(await api.netlist()); }
+  catch (e) { state.nets = null; console.warn("netlist unavailable; schematic nets fall back to labels", e); }
+}
+
 function onKiCanvasSelect(pane: Pane, item: any) {
   const comp = itemToComponent(item);
   // Composing a comment? Clicking parts/nets attaches them as anchors.
@@ -220,15 +265,9 @@ function onKiCanvasSelect(pane: Pane, item: any) {
   const a = itemToAnchor(item);
   if (a && composing && a.kind !== "point") addAnchor(a);
 
-  if (comp?.isNet) {
-    state.selected = comp;
-    renderProps();
-    showRightTab("props");
-    return;
-  }
-  const ref = comp?.ref ?? null;
+  const ref = comp && !comp.isNet ? comp.ref : null;
   // Programmatic selects (from cross-probing) echo back here with the same ref: don't re-broadcast.
-  if (ref === state.selectedRef) return;
+  if (ref === state.selectedRef && !(ref === null && state.selectedNet)) return;
   setFocus(pane);
   // Defer: we're inside KiCanvas' select() call stack, which is guarded by a @no_self_recursion
   // decorator that is shared across viewer instances, so selecting in the other pane now is dropped.
@@ -525,9 +564,17 @@ function renderProps() {
     return;
   }
   if (s.isNet) {
-    host.innerHTML = `<h3>${esc(s.ref)}</h3><div class="sub">Net (highlighted)</div>
-      <div class="pactions"><button class="primary" data-pa="comment">Comment on net ${esc(s.ref)}</button></div>`;
+    const nodes = state.selectedNet?.nodes ?? [];
+    host.innerHTML = `<h3>${esc(s.ref)}</h3><div class="sub">Net · ${nodes.length} pin${nodes.length === 1 ? "" : "s"}</div>
+      <div class="props-nodes">${nodes.slice().sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+        .map((n) => `<button data-ref="${esc(n.slice(0, n.lastIndexOf(".")))}">${esc(n)}</button>`).join("")}</div>
+      <div class="pactions">
+        <button class="primary" data-pa="comment">Comment on net ${esc(s.ref)}</button>
+        <button class="secondary" data-pa="zoom">Zoom to</button>
+      </div>`;
     $("[data-pa=comment]", host).onclick = () => { addAnchor({ kind: "net", name: s.ref }); focusComposer(); };
+    $("[data-pa=zoom]", host).onclick = () => state.selectedNet && selectNet(state.selectedNet, { zoom: true });
+    $$<HTMLButtonElement>(".props-nodes button", host).forEach((b) => (b.onclick = () => selectRef(b.dataset.ref!, { zoom: true })));
     return;
   }
   const rows = ([
@@ -668,6 +715,7 @@ function bindUi() {
       pane?.kc?.zoomSelection();
       pane?.three?.highlight(state.selectedRef, true);
     }
+    if (a === "zoomsel" && state.selectedNet) pane?.kc?.selectNet(state.selectedNet, true);
     if (a === "comment") setCommentMode(!state.commentMode);
     if (a === "left") $("#left").hidden = !$("#left").hidden;
   };
@@ -704,6 +752,7 @@ async function boot() {
       if (msg.type === "review") return refreshReview();
       state.project = await api.project();
       renderStatus();
+      await loadNetlist();
       const kinds = new Set(state.panes.map((p) => (p.kind === "3d" ? "pcb" : p.kind)));
       const relevant = msg.changed.length === 0 ||
         state.project.files.some((f) => msg.changed.includes(f.path) && (kinds.has(f.kind as "sch" | "pcb") || f.kind === "pro"));
@@ -714,7 +763,7 @@ async function boot() {
   );
 
   requestAnimationFrame(updatePins);
-  await Promise.all([showMode(state.mode), refreshReview()]);
+  await Promise.all([loadNetlist(), showMode(state.mode), refreshReview()]);
 }
 
 boot().catch((e) => {

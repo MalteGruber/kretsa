@@ -9,8 +9,8 @@ const REFDES = /^[A-Z]{1,4}\d+[A-Z]?$/;
 
 export interface ThreeView {
   snapshot(): string;
-  /** Tint the part with this refdes (null clears) and optionally frame the camera on it. */
-  highlight(ref: string | null, frame?: boolean): void;
+  /** Tint the part(s) with this refdes (null clears) and optionally frame the camera on them. */
+  highlight(ref: string | string[] | null, frame?: boolean): void;
   /** Reset the camera to frame the whole board. */
   fit(): void;
   dispose(): void;
@@ -96,12 +96,12 @@ export async function mountThree(
   model.traverse((o) => { if (REFDES.test(o.name) && !nodesByRef.has(o.name)) nodesByRef.set(o.name, o); });
   let highlighted: THREE.Mesh[] = [];
 
-  const highlight = (ref: string | null, frame = false) => {
+  const highlight = (ref: string | string[] | null, frame = false) => {
     for (const m of highlighted) m.material = m.userData.origMaterial;
     highlighted = [];
-    const node = ref ? nodesByRef.get(ref) : undefined;
-    if (!node) return;
-    node.traverse((o) => {
+    const nodes = (ref == null ? [] : Array.isArray(ref) ? ref : [ref]).map((r) => nodesByRef.get(r)).filter((n): n is THREE.Object3D => !!n);
+    if (!nodes.length) return;
+    for (const node of nodes) node.traverse((o) => {
       const m = o as THREE.Mesh;
       if (!m.isMesh) return;
       m.userData.origMaterial ??= m.material;
@@ -115,7 +115,8 @@ export async function mountThree(
       highlighted.push(m);
     });
     if (frame) {
-      const b = new THREE.Box3().setFromObject(node);
+      const b = new THREE.Box3();
+      for (const node of nodes) b.expandByObject(node);
       const c = b.getCenter(new THREE.Vector3());
       const dist = Math.max(b.getSize(new THREE.Vector3()).length() * 4, size * 0.25);
       const dir = camera.position.clone().sub(controls.target).normalize();

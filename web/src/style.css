@@ -227,3 +227,11 @@ button.primary:hover { background: #1558b5; }
 #props .pactions button { flex: 1; }
 button.secondary { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; color: var(--fg); }
 button.secondary:hover { background: var(--panel-2); }
+
+/* Schematic net highlight (KiCanvasView overlay) */
+.viewer > svg.netlayer { pointer-events: none; overflow: visible; }
+.netlayer path { fill: none; stroke: #ff7a1a; stroke-opacity: 0.55; stroke-linecap: round; stroke-linejoin: round; }
+.netlayer circle { fill: #ff7a1a; fill-opacity: 0.7; }
+.props-nodes { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+.props-nodes button { font: 11px/1.6 ui-monospace, monospace; padding: 0 6px; border: 1px solid var(--border); border-radius: 3px; background: var(--panel-2); cursor: pointer; }
+.props-nodes button:hover { border-color: var(--accent); color: var(--accent); }

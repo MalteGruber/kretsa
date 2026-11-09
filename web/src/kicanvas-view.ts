@@ -11,6 +11,7 @@
 //   app.project.pages(), project.set_active_page(page)
 
 import type { Anchor, ProjectInfo } from "../../shared/review";
+import { buildSheetGroups, groupAt, groupNodes, type NetIndex, type NetSel, type SchGroup } from "./nets";
 
 let loaded: Promise<boolean> | null = null;
 
@@ -82,8 +83,17 @@ export class KiCanvasView {
   private listenedViewer: any = null;
   /** Called with the raw KiCanvas item (or null) when the *user* selects something. */
   onSelect: ((item: any) => void) | null = null;
+  /** Called when the *user* picks a net (wire/label in the schematic; track, via, zone or pad on the PCB). */
+  onNet: ((sel: NetSel) => void) | null = null;
+  /** Schematic netlist provider (set by the app; null until /api/netlist has loaded). */
+  nets: () => NetIndex | null = () => null;
   /** >0 while we select programmatically (cross-probing, sheet switches): events are not user input. */
   private quiet = 0;
+  /** Highlighted net: netlist name (sch) or board net name (pcb). */
+  private net: string | null = null;
+  private groupsCache: { doc: unknown; nets: unknown; groups: SchGroup[] } | null = null;
+  private overlay: SVGSVGElement | null = null;
+  private overlayKey = "";
 
   constructor(
     readonly host: HTMLElement,
@@ -132,23 +142,304 @@ export class KiCanvasView {
     if (v && v !== this.listenedViewer) {
       this.listenedViewer = v;
       v.addEventListener("kicanvas:select", (e: CustomEvent) => { if (!this.quiet) this.onSelect?.(e.detail?.item ?? null); });
-      if (this.kind === "pcb") {
-        // A click usually hits a footprint *and* a net; KiCanvas would pop a chooser menu.
-        // Prefer the footprint (component selection), fall back to the net.
-        v.contextMenuCallback = (_x: number, _y: number, items: Map<string, unknown>, choose: (i: unknown) => void) => {
-          const entries = [...items];
-          choose((entries.find(([k]) => k.startsWith("Footprint")) ?? entries[0])![1]);
-        };
-        // Net clicks only highlight the net (no select event), so surface them ourselves.
-        const orig = v.handleItemClick.bind(v);
-        v.handleItemClick = (item: any) => {
-          orig(item);
-          if (item && typeof item.netname === "string") this.onSelect?.(item);
-        };
-      }
+      // Replace KiCanvas' click handling: it only picks symbols (sch) and pops a chooser menu for
+      // footprint-vs-net (pcb), and ignores wires, labels and zones.
+      const orig = v.on_pick.bind(v);
+      v.on_pick = (mouse: any, items: Iterable<{ bbox: any }>) => {
+        try {
+          if (this.kind === "sch" ? this.pickSchNet(mouse) : this.pickPcb(mouse, items)) return;
+        } catch (e) { console.warn("pick failed", e); }
+        this.clearNet();
+        orig(mouse, items);
+      };
     }
     return v;
   }
+
+  // ---------------------------------------------------------------------------------------------
+  // Nets
+  // ---------------------------------------------------------------------------------------------
+
+  /** Schematic: connectivity groups of the displayed sheet (cached per document + netlist). */
+  private groups(): SchGroup[] {
+    const v = this.viewer;
+    if (this.kind !== "sch" || !v) return [];
+    const nets = this.nets();
+    let c = this.groupsCache;
+    if (!c || c.doc !== v.document || c.nets !== nets) {
+      const sheet = this.app?.project?.active_page?.sheet_path ?? "/";
+      let groups: SchGroup[] = [];
+      try { groups = buildSheetGroups(v.document, nets, typeof sheet === "string" ? sheet : "/"); } catch (e) { console.warn("connectivity failed", e); }
+      c = this.groupsCache = { doc: v.document, nets, groups };
+    }
+    return c.groups;
+  }
+
+  /** px -> mm at the current zoom. */
+  private pxToMm(px: number): number {
+    const a = this.screenToWorld(0, 0), b = this.screenToWorld(px, 0);
+    return a && b ? Math.abs(b[0] - a[0]) : px * 0.1;
+  }
+
+  private pickSchNet(mouse: { x: number; y: number }): boolean {
+    const g = groupAt(this.groups(), [mouse.x, mouse.y], Math.max(0.3, this.pxToMm(5)));
+    if (!g) return false;
+    const groups = g.net ? this.groups().filter((x) => x.net === g.net) : [g];
+    const name = g.net ?? "(unnamed net)";
+    const nodes = g.net ? this.nets()?.byName.get(g.net) ?? groupNodes(groups) : groupNodes(groups);
+    this.quietly(() => this.viewer?.select(null));
+    this.showSchNet(g.net, g.net ? undefined : [g]);
+    this.onNet?.({ name, nodes });
+    return true;
+  }
+
+  private pickPcb(mouse: { x: number; y: number }, items: Iterable<{ bbox: any }>): boolean {
+    const hits = [...items].map((i) => i.bbox?.context).filter(Boolean);
+    const isFp = (i: any) => typeof i.reference === "string" && Array.isArray(i.pads);
+    const isPad = (i: any) => Array.isArray(i.parent?.pads) && "number" in i;
+    const netOf = (i: any): string => { try { return String(i.netname ?? i.net_name ?? ""); } catch { return ""; } };
+    // Priority: track/via (thin: clicking one is deliberate) > footprint > zone fill under the cursor.
+    // Clicking a pad of the already-selected footprint selects the pad's net.
+    const track = hits.find((i) => !isPad(i) && !isFp(i) && typeof i.net_name !== "string" && netOf(i));
+    const fp = hits.find(isFp);
+    const pad = hits.find((i) => isPad(i) && netOf(i)) ?? (fp ? this.padAt(fp, mouse) : undefined);
+    const fpSelected = fp && this.viewer?.selected?.context === fp;
+    const zone = hits.find((i) => typeof i.net_name === "string" && i.net_name && this.zoneContains(i, mouse));
+    const netItem = track ?? (fpSelected && pad ? pad : undefined) ?? (fp ? undefined : zone ?? pad);
+    if (netItem) {
+      const name = netOf(netItem);
+      this.quietly(() => this.viewer?.select(null));
+      this.showPcbNet(name);
+      this.onNet?.({ name, nodes: this.pcbNetNodes(name) });
+      return true;
+    }
+    if (fp) { this.clearNet(); this.viewer.select(fp); return true; }
+    return false;
+  }
+
+  /** World position of a pad (KiCad: pad `at` is in footprint coords, rotation CCW with y down). */
+  private padWorld(fp: any, pad: any): [number, number] {
+    const t = ((fp.at?.rotation ?? 0) * Math.PI) / 180;
+    const x = pad.at.position.x, y = pad.at.position.y;
+    return [fp.at.position.x + x * Math.cos(t) + y * Math.sin(t), fp.at.position.y - x * Math.sin(t) + y * Math.cos(t)];
+  }
+
+  /** The pad of `fp` under `m` (with a netname), if any. */
+  private padAt(fp: any, m: { x: number; y: number }): any {
+    for (const pad of fp.pads ?? []) {
+      let n = "";
+      try { n = pad.netname ?? ""; } catch {}
+      if (!n || !pad.at || !pad.size) continue;
+      const [cx, cy] = this.padWorld(fp, pad);
+      const t = ((pad.at.rotation ?? 0) * Math.PI) / 180; // absolute pad rotation
+      const dx = m.x - cx, dy = m.y - cy;
+      const lx = dx * Math.cos(t) - dy * Math.sin(t), ly = dx * Math.sin(t) + dy * Math.cos(t);
+      if (Math.abs(lx) <= pad.size.x / 2 && Math.abs(ly) <= pad.size.y / 2) return pad;
+    }
+    return undefined;
+  }
+
+  private zoneContains(z: any, m: { x: number; y: number }): boolean {
+    const fills: any[] = z.filled_polygons ?? [];
+    if (!fills.length) return false;
+    const layers = this.viewer?.layers;
+    return fills.some((f) => {
+      if (layers?.by_name?.(f.layer)?.visible === false) return false;
+      const pts: { x: number; y: number }[] = f.polyline ?? [];
+      let inside = false;
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const a = pts[i]!, b = pts[j]!;
+        if (a.y > m.y !== b.y > m.y && m.x < ((b.x - a.x) * (m.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+      }
+      return inside;
+    });
+  }
+
+  /** PCB: pads on a net, as "REF.PAD". */
+  pcbNetNodes(name: string): string[] {
+    const out = new Set<string>();
+    for (const fp of this.viewer?.board?.footprints ?? []) {
+      for (const pad of fp.pads ?? []) {
+        let n = "";
+        try { n = pad.netname ?? ""; } catch {}
+        if (n === name && pad.number) out.add(`${fp.reference}.${pad.number}`);
+      }
+    }
+    return [...out];
+  }
+
+  private quietly(fn: () => void) {
+    this.quiet++;
+    try { fn(); } finally { this.quiet--; }
+  }
+
+  private showPcbNet(name: string | null) {
+    const v = this.viewer;
+    if (!v) return;
+    this.net = name;
+    const num = name ? v.board?.nets?.find((n: any) => n.name === name)?.number : undefined;
+    // Selection and net highlight share KiCanvas' overlay layer, and select() repaints it on a
+    // setTimeout(0), so paint the net after that.
+    setTimeout(() => {
+      if (this.net !== name || this.viewer !== v) return;
+      if (num) v.highlight_net(num);
+      else { v.layers.overlay.clear(); v.draw(); }
+    }, 0);
+  }
+
+  private showSchNet(name: string | null, groups?: SchGroup[]) {
+    this.net = name;
+    this.schNetGroups = groups ?? null;
+    this.overlayKey = "";
+    this.ensureOverlay();
+  }
+  private schNetGroups: SchGroup[] | null = null;
+
+  /** The highlighted net's groups on the displayed sheet. */
+  private litGroups(): SchGroup[] {
+    if (this.schNetGroups) return this.schNetGroups;
+    return this.net ? this.groups().filter((g) => g.net === this.net) : [];
+  }
+
+  clearNet() {
+    if (this.net == null && !this.schNetGroups) return;
+    if (this.kind === "pcb") {
+      this.net = null;
+      const v = this.viewer;
+      if (v && !v.selected) { v.layers.overlay.clear(); v.draw(); }
+    } else this.showSchNet(null);
+  }
+
+  /**
+   * Cross-probe entry point for nets. Schematic: switches to a sheet showing the net if needed.
+   * Returns false if the net isn't found in this document.
+   */
+  async selectNet(sel: NetSel | null, zoom = false): Promise<boolean> {
+    if (!sel) { this.clearNet(); return true; }
+    this.quiet++;
+    try {
+      this.viewer?.select(null);
+      return this.kind === "pcb" ? this.selectPcbNet(sel, zoom) : await this.selectSchNet(sel, zoom);
+    } finally { this.quiet--; }
+  }
+
+  private selectPcbNet(sel: NetSel, zoom: boolean): boolean {
+    const v = this.viewer;
+    if (!v) return false;
+    // Majority vote over pins, else by name (also tolerating a leading "/" difference).
+    const votes = new Map<string, number>();
+    const pads = new Map<string, string>();
+    for (const fp of v.board?.footprints ?? []) for (const pad of fp.pads ?? []) {
+      try { if (pad.netname) pads.set(`${fp.reference}.${pad.number}`, pad.netname); } catch {}
+    }
+    for (const n of sel.nodes) { const net = pads.get(n); if (net) votes.set(net, (votes.get(net) ?? 0) + 1); }
+    const names: string[] = (v.board?.nets ?? []).map((n: any) => n.name);
+    const strip = (s: string) => s.replace(/^\//, "");
+    const name = [...votes].sort((a, b) => b[1] - a[1])[0]?.[0] ??
+      names.find((n) => n === sel.name) ?? names.find((n) => n && strip(n) === strip(sel.name));
+    if (!name) { this.clearNet(); return false; }
+    this.showPcbNet(name);
+    if (zoom) this.zoomToBoxes(this.pcbNetBoxes(name));
+    return true;
+  }
+
+  private pcbNetBoxes(name: string): any[] {
+    const out: any[] = [];
+    for (const layer of this.viewer?.layers?.in_order?.() ?? []) {
+      if (!layer.visible) continue;
+      for (const [item, bb] of layer.bboxes ?? []) {
+        let n: string | undefined;
+        try { n = item?.netname ?? item?.net_name; } catch {}
+        if (n === name && bb?.w < 1000) out.push(bb);
+      }
+    }
+    // Pads aren't indexed separately (they're part of the footprint's bbox): add them by geometry.
+    const v = this.viewer;
+    const BBox = v?.viewport?.camera?.bbox?.constructor;
+    if (BBox) for (const fp of v.board?.footprints ?? []) for (const pad of fp.pads ?? []) {
+      let n = "";
+      try { n = pad.netname ?? ""; } catch {}
+      if (n !== name || !pad.at || !pad.size) continue;
+      const [x, y] = this.padWorld(fp, pad);
+      const r = Math.max(pad.size.x, pad.size.y) / 2;
+      out.push(new BBox(x - r, y - r, 2 * r, 2 * r));
+    }
+    return out;
+  }
+
+  private async selectSchNet(sel: NetSel, zoom: boolean): Promise<boolean> {
+    const nets = this.nets();
+    const name = nets?.resolve(sel) ?? sel.name;
+    const onSheet = () => this.groups().some((g) => g.net === name);
+    if (!onSheet()) {
+      // Find a sheet with a pin or label of this net.
+      const project = this.app?.project;
+      const refs = new Set((nets?.byName.get(name) ?? sel.nodes).map((n) => n.slice(0, n.lastIndexOf("."))));
+      const pages = project ? [...project.pages()].filter((pg: any) => pg.type === "schematic") : [];
+      const page = pages.find((pg: any) => [...refs].some((r) => pg.document?.find_symbol?.(r))) ?? null;
+      if (page && page !== project.active_page) {
+        project.set_active_page(page);
+        const t0 = performance.now();
+        while (performance.now() - t0 < 3000 && !onSheet()) await new Promise((r) => setTimeout(r, 50));
+      }
+    }
+    this.showSchNet(name);
+    const lit = this.litGroups();
+    if (!lit.length) return false;
+    if (zoom) {
+      const v = this.viewer;
+      const pts = lit.flatMap((g) => [...g.wires.flat(), ...g.pins.map((p) => p.at), ...g.labels]);
+      if (v && pts.length) {
+        const BBox = v.viewport.camera.bbox.constructor;
+        const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+        const x0 = Math.min(...xs), y0 = Math.min(...ys);
+        this.zoomToBoxes([new BBox(x0, y0, Math.max(...xs) - x0, Math.max(...ys) - y0)]);
+      }
+    }
+    return true;
+  }
+
+  private zoomToBoxes(boxes: any[]) {
+    const v = this.viewer;
+    if (!v || !boxes.length) return;
+    const BBox = boxes[0].constructor;
+    const bb = BBox.combine(boxes);
+    const pad = Math.max(bb.w, bb.h, 5) * 0.2 + 2;
+    v.viewport.camera.bbox = bb.grow(pad);
+    v.draw();
+  }
+
+  /** Schematic net highlight: an SVG layer over the canvas, re-projected every frame while active. */
+  private ensureOverlay() {
+    if (this.kind !== "sch") return;
+    if (!this.overlay) {
+      this.overlay = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      this.overlay.classList.add("netlayer");
+      this.host.appendChild(this.overlay);
+    }
+    if (this.looping) return;
+    this.looping = true;
+    let first: unknown = null;
+    const tick = () => {
+      const lit = this.litGroups();
+      if (!lit.length) { this.overlay!.innerHTML = ""; this.overlayKey = ""; this.looping = false; return; }
+      if (!this.overlay!.isConnected) this.host.appendChild(this.overlay!);
+      const cam = this.viewer?.viewport?.camera;
+      const k = cam ? `${cam.center.x},${cam.center.y},${cam.zoom},${this.host.clientWidth},${this.host.clientHeight},${lit.length}` : "";
+      if (k && (k !== this.overlayKey || lit[0] !== first)) {
+        this.overlayKey = k;
+        first = lit[0];
+        const s = (p: [number, number]) => this.worldToScreen(p[0], p[1]) ?? [0, 0];
+        const w = Math.max(3, Math.min(10, 0.6 / this.pxToMm(1)));
+        const lines = lit.flatMap((g) => g.wires.map(([a, b]) => { const [x1, y1] = s(a), [x2, y2] = s(b); return `M${x1} ${y1}L${x2} ${y2}`; })).join("");
+        const dots = lit.flatMap((g) => [...g.pins.map((p) => p.at), ...g.labels]).map((p) => { const [x, y] = s(p); return `<circle cx="${x}" cy="${y}" r="${w * 0.9}"/>`; }).join("");
+        this.overlay!.innerHTML = `<path d="${lines}" stroke-width="${w}"/>${dots}`;
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+  private looping = false;
 
   async waitViewer(timeoutMs = 20000): Promise<any> {
     const t0 = performance.now();
@@ -182,6 +473,7 @@ export class KiCanvasView {
   private async selectRefInner(ref: string | null, zoom: boolean): Promise<boolean> {
     let v = this.viewer;
     if (!v) return false;
+    this.clearNet();
     if (!ref) { this.select(null); return true; }
     const find = (vv: any) => this.kind === "sch" ? vv?.schematic?.find_symbol?.(ref) : vv?.board?.find_footprint?.(ref);
     if (!find(v) && this.kind === "sch") {

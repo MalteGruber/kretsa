@@ -2,7 +2,7 @@ import { watch } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { CommentPatch, NewComment, ProjectInfo, ServerMessage } from "../../shared/review";
-import { detectKicadCli, exportGlb } from "./kicad";
+import { detectKicadCli, exportGlb, exportNetlist } from "./kicad";
 import { safeJoin, scanProject } from "./project";
 import { ReviewStore } from "./review";
 
@@ -59,6 +59,18 @@ const server = Bun.serve({
       }
     }
 
+    if (path === "/api/netlist") {
+      if (!kicadCli) return json({ error: "kicad-cli not installed" }, 503);
+      const sch = rootSchematic();
+      if (!sch) return json({ error: "no .kicad_sch in project" }, 404);
+      try {
+        return json(await exportNetlist(PROJECT_DIR, join(PROJECT_DIR, sch), project.rev));
+      } catch (e) {
+        console.error(e);
+        return json({ error: String((e as Error).message) }, 500);
+      }
+    }
+
     if (path === "/api/review" && req.method === "GET") return json(await review.load());
 
     if (path === "/api/review/comments" && req.method === "POST") {
@@ -96,6 +108,13 @@ const server = Bun.serve({
     message() {},
   },
 });
+
+/** The root sheet: named like the .kicad_pro, else the shallowest .kicad_sch. */
+function rootSchematic(): string | undefined {
+  const pro = project.files.find((f) => f.kind === "pro")?.path.replace(/\.kicad_pro$/, ".kicad_sch");
+  const schs = project.files.filter((f) => f.kind === "sch").map((f) => f.path);
+  return schs.find((p) => p === pro) ?? schs.sort((a, b) => a.split("/").length - b.split("/").length)[0];
+}
 
 function broadcast(msg: ServerMessage) {
   server.publish("all", JSON.stringify(msg));

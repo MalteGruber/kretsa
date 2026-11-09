@@ -1,3 +1,4 @@
+import type { Netlist } from "../../shared/netlist";
 import type { Comment, CommentPatch, NewComment, ProjectInfo, Review, ServerMessage } from "../../shared/review";
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -13,6 +14,7 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
 export const api = {
   project: () => req<ProjectInfo>("GET", "/api/project"),
   review: () => req<Review>("GET", "/api/review"),
+  netlist: () => req<Netlist>("GET", "/api/netlist"),
   addComment: (c: NewComment) => req<Comment>("POST", "/api/review/comments", c),
   patchComment: (id: string, p: CommentPatch) => req<Comment>("PATCH", `/api/review/comments/${id}`, p),
 };

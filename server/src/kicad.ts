@@ -1,5 +1,6 @@
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import type { Netlist, NetlistNet } from "../../shared/netlist";
 
 const CLI = process.env.KICAD_CLI ?? "kicad-cli";
 
@@ -72,4 +73,51 @@ async function runExport(projectDir: string, pcbPath: string, out: string): Prom
     const base = tmpPcb.replace(/\.kicad_pcb$/, "");
     await Promise.all(["kicad_pcb", "kicad_prl", "kicad_pro"].map((ext) => rm(`${base}.${ext}`, { force: true })));
   }
+}
+
+const netlists = new Map<string, Promise<Netlist>>();
+
+/**
+ * Schematic netlist via `kicad-cli sch export netlist --format kicadxml`, cached in memory by `rev`
+ * (the netlist depends on every sheet, so the project rev is the key). Takes ~0.5 s.
+ */
+export function exportNetlist(projectDir: string, schPath: string, rev: string): Promise<Netlist> {
+  const key = `${schPath}@${rev}`;
+  let job = netlists.get(key);
+  if (!job) {
+    netlists.clear(); // only the latest rev is ever needed
+    job = runNetlist(projectDir, schPath);
+    job.catch(() => netlists.delete(key));
+    netlists.set(key, job);
+  }
+  return job;
+}
+
+async function runNetlist(projectDir: string, schPath: string): Promise<Netlist> {
+  const out = join(projectDir, ".wiber", "cache", `netlist-${process.pid}-${Date.now()}.xml`);
+  await mkdir(dirname(out), { recursive: true });
+  try {
+    const p = Bun.spawn([CLI, "sch", "export", "netlist", "--format", "kicadxml", "-o", out, schPath], {
+      cwd: projectDir, stdout: "pipe", stderr: "pipe",
+    });
+    const stderr = await new Response(p.stderr).text();
+    if ((await p.exited) !== 0) throw new Error(`kicad-cli netlist export failed:\n${stderr}`);
+    return parseNetlistXml(await readFile(out, "utf8"));
+  } finally {
+    await rm(out, { force: true });
+  }
+}
+
+const unxml = (s: string) =>
+  s.replace(/&(lt|gt|quot|apos|amp);/g, (_, e) => ({ lt: "<", gt: ">", quot: '"', apos: "'", amp: "&" })[e as "lt"]!);
+
+/** The kicadxml netlist is regular enough to read with regexes: <net name=".."> <node ref=".." pin=".."/> */
+export function parseNetlistXml(xml: string): Netlist {
+  const nets: NetlistNet[] = [];
+  const section = xml.slice(xml.indexOf("<nets>"));
+  for (const m of section.matchAll(/<net\s[^>]*?name="([^"]*)"[^>]*>([\s\S]*?)<\/net>/g)) {
+    const nodes = [...m[2]!.matchAll(/<node\s[^>]*?ref="([^"]*)"[^>]*?pin="([^"]*)"/g)].map((n) => `${unxml(n[1]!)}.${unxml(n[2]!)}`);
+    nets.push({ name: unxml(m[1]!), nodes });
+  }
+  return { nets };
 }
