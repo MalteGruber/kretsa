@@ -14,15 +14,17 @@ Only the AI agent (or the human in KiCad) changes the design. The viewer's only 
 2. The server watches the dir, regenerates derived assets (the 3D GLB, and optionally SVG or netlist), and
    pushes a reload to the browser.
 3. The human views the sch, pcb, or 3D tab, selects items or areas, sketches, and writes comments.
-4. The comments are saved to `<project>/.kretsa/` as plain JSON plus PNG snapshots.
-5. The agent reads `.kretsa/review.json`, makes the changes, and marks each comment `addressed` with a
-   short note. The human then resolves it or reopens it.
+4. The comments are saved to `<project>/.kretsa/` as plain JSON plus PNG snapshots, as drafts until the human
+   presses **Send to AI** (or posts with Send).
+5. The agent, blocked in `kretsa wait` (run in the background), gets the sent comments, makes the changes, verifies
+   them (`kretsa check`, `diff`, `render`) and answers with `kretsa reply <#> "…" --addressed`. The human then
+   resolves or reopens (a human reply or reopen sends the comment again).
 
 ## Architecture
 
 ```
 kretsa/
-  shared/   contract types: review.ts (review.json), check.ts (ERC/DRC report), netlist.ts
+  shared/   contract types: review.ts (review.json), check.ts (ERC/DRC report), netlist.ts, library.ts, diff.ts
   core/     @kretsa/core: all project logic, no HTTP (scan, kicad-cli wrappers, review store, checks)
   cli/      @kretsa/cli: the `kretsa` binary. Agent-facing (markdown out, --json), plus `kretsa serve`
   server/   @kretsa/server: thin HTTP + WebSocket layer over core, exists only for the web UI (startServer())
@@ -91,7 +93,12 @@ This is the contract with the AI agent, so keep it stable, human-readable, and d
       "text": "Move C12 closer to U3 pin 4, keep loop small",
       "design_rev": "sha256:...",     // hash of the files when the comment was made
       "thread": [ { "author": "ai", "text": "Moved C12 to ...", "at": "2026-11-08T..." } ],
-      "created": "2026-11-08T..."
+      "created": "2026-11-08T...",
+      "sent": "2026-11-08T..."        // when the human sent it to the agent; unset = draft
+    },
+    {                                 // a library comment
+      "view": "lib", "part": "Proj:LM1117", "aspect": "footprint",   // symbol | footprint | 3d; no part = new part request
+      "anchors": [ { "kind": "pin", "pin": "3", "name": "VI" }, { "kind": "pad", "ref": "Proj:SOT-223", "pad": "4" } ], ...
     }
   ]
 }
@@ -102,7 +109,9 @@ Rules:
   stay valid across zoom levels and re-renders.
 - Prefer semantic anchors (refdes, UUID, net, pad `U3.4`) over bare geometry, and add geometry as context.
 - Write files atomically (write to a temp file, then rename). Both the agent and the server may touch
-  this file. The agent may only append to `thread` and change `status`.
+  this file. The agent may only append to `thread` and change `status`, normally through `kretsa reply`
+  (`ReviewStore.patch`, which refuses `resolved` from the agent and re-sends on human replies/reopens).
+- `kretsa wait` remembers what it returned in `.kretsa/agent.json` (`seen` = latest `sent`).
 - Also generate `.kretsa/REVIEW.md`, a readable summary of the open comments, for agents that work
   better from markdown.
 
@@ -129,6 +138,9 @@ kretsa projects | use <project>     # list projects / switch the current one (th
 KRETSA_PROJECT=/path bun run dev    # frontend dev: server :7777 + Vite HMR :5177 (no project: fixtures/stickhub)
 kretsa check [project]              # ERC + DRC + parity, markdown, new/fixed since last `kretsa check`
 kretsa status | review [project]    # summary / open comments as markdown
+kretsa wait | reply <#> "…" --addressed   # the agent's side of Send to AI
+kretsa diff [since] | render sch|pcb|3d [--around U3] [--net X]   # what changed / images to look at
+kretsa lib check [--klc] | lib set <part> F=V                     # part lint / safe field edits
 kretsa lib [query] | lib show <part> | lib fp <Lib:Name>   # parts, detail + renders (PNG) for the agent
 bun run typecheck
 ```
@@ -155,7 +167,12 @@ House style (field sets, KLC deviations) is the user's workspace CLAUDE.md's bus
 
 The web **Library** mode (`web/src/library-view.ts`, key `5`) shows the same data: a part list with issue badges, and per part the
 symbol and footprint (kicad-cli SVGs, cached in `.kretsa/parts/` until the library file changes), 3D (GLB of the scratch board), and pin/pad/field
-tables. Library file changes inside the project broadcast `{type:"lib"}`. Libraries outside the project dir are not watched yet.
+tables. Library file changes broadcast `{type:"lib"}`; libraries outside the project dir (absolute or `${ENV}` paths in a lib
+table) get their own watchers, refreshed when a lib table changes. Comments in Library mode go to the selected part (`view:"lib"`,
+`part`, `aspect`): the tiles' Comment buttons set the aspect, pin/pad rows add anchors, "Request a new part" comments without a
+part. The server attaches the symbol/footprint render as the snapshot; 3D comments snapshot the three.js tile.
+**KLC** (`core/src/klc.ts`) is an opt-in generic subset of the KiCad Library Conventions (`klc_<rule>` issues; `--klc`,
+`?klc=1`, the KLC checkbox). `core/src/lib-edit.ts` (`kretsa lib set`) splices symbol field values, verifies, writes atomically.
 
 **Checks** (`core/src/check.ts`): `kicad-cli sch erc` and `pcb drc --schematic-parity` (JSON, mm), normalized to `CheckReport`
 (sources: erc, drc, unconnected, parity). Library-lookup types (`lib_symbol_issues`, `footprint_link_issues`, …) are flagged
@@ -163,12 +180,21 @@ tables. Library file changes inside the project broadcast `{type:"lib"}`. Librar
 `kretsa check` diffs against `.kretsa/check/baseline.json` (its own previous full run) to show NEW and FIXED. kicad-cli
 creates a `.kicad_prl` next to its input; `runCli` deletes it if it wasn't there before.
 
+**Design geometry, renders, diffs**: `core/src/design.ts` parses board (footprints, pads with nets, tracks, vias, zones, edge)
+and schematic sheets (placed symbols with all instance refs, pin positions, bboxes) from the files. `design-render.ts`
+(`kretsa render`) exports `kicad-cli sch|pcb export svg` (document mm; cached per rev/hash in `.kretsa/cache/`), crops the
+viewBox around parts/nets, overlays magenta marks and rasterizes with resvg. kicad-cli's invisible `<text>` copies are used to
+find which schematic page shows a ref, and stripped before rasterizing (resvg panics on some when zoomed). `diff.ts` keeps copies
+of the design files per rev in `.kretsa/revs/<rev>/` (on comment creation and full `kretsa check`, newest 50) and diffs parts,
+pad nets and routing (`kretsa diff`, `GET /api/diff?since=`).
+
 ## Code map
 
 - `shared/review.ts`: **the review contract** (review.json), so change it carefully. `shared/check.ts`, `shared/netlist.ts`.
 - `core/src/`: `project.ts` (scan + hash, `findProjectDir`, `rootSchematic`/`mainPcb`, `.wiber`→`.kretsa` migration),
   `kicad.ts` (kicad-cli detection, GLB export cached in `.kretsa/cache/<hash>.glb`, netlist), `review.ts` (review store:
   atomic writes, REVIEW.md, snapshot PNGs, ink SVG), `check.ts` (ERC/DRC, diff, markdown).
+- `core/src/design.ts`, `design-render.ts`, `diff.ts`, `klc.ts`, `lib-edit.ts`: see above.
 - `cli/src/main.ts`: `kretsa` commands. `server/src/server.ts`: `startServer()` with routes, WebSocket and watcher.
 - `web/src/main.ts`: app state, panes, selection and cross-probing, comments, drawing, checks tab.
   `kicanvas-view.ts` wraps KiCanvas (picking, nets, camera, capture). `nets.ts` holds schematic connectivity. `ink.ts` holds drawing.
@@ -182,7 +208,7 @@ creates a `.kicad_prl` next to its input; `runCli` deletes it if it wasn't there
 Colors follow VS Code "Dark Modern" (CSS vars in `style.css`). The KiCanvas canvases are recolored at runtime by
 `kicad-theme.ts`, because KiCanvas has no theme API: it mutates its shared Color objects, then calls `paint()`. Layout borrows from enterprise EDA web viewers. The top bar has view tabs (Schematic | PCB | 3D). The left panel has
 Documents and Components (searchable). The right panel has Comments, Properties of the selection, and Checks (ERC/DRC list; click to jump to the location, marked `!`). A floating
-toolbar sits at the bottom (Fit, Zoom to selection, Comment mode, Toggle panel), and the PCB view has a layer bar
+toolbar sits at the bottom (Fit, Zoom to selection, Comment mode, Draw, Toggle panel), and the PCB view has a layer bar
 (click focuses a layer, right-click shows or hides it). Comments appear as numbered pins on the canvas and follow
 the camera. Keys: `C` comment mode (click to drop a pin), `D` draw, `F` fit, `Z` zoom to selection, `1/2/3/4` views, `[` panel, `Esc`.
 
@@ -204,6 +230,11 @@ summarized into `ink_shapes`: `covers` = parts enclosed by a box or loop, or tou
 Referenced parts and an overall `area` are added as anchors. The server writes `ink/<id>.svg` and describes the shapes in
 REVIEW.md. A cropped PNG with the ink burned in becomes the snapshot (`KiCanvasView.capture()` renders WebGL synchronously and
 copies the canvas in the same task, because there is no preserveDrawingBuffer).
+
+**Send to AI**: the composer has Send (post + send all drafts, Ctrl+Enter) and Draft (Ctrl+Shift+Enter). Drafts show a "draft"
+pill and a Send button; the top bar's Send to AI button and the bar above the composer send all of them (`POST /api/review/send`).
+**What changed?**: comments whose `design_rev` differs from the current rev get a button that lists `/api/diff` and draws changed
+parts as dashed boxes on the canvas (`state.diff`, `diffMarkup`).
 
 **Phone** (`max-width: 820px`): side panels become drawers (hamburger and comments button), split stacks vertically, toolbar
 icons only. KiCanvas supports touch pan and pinch natively. The draw catcher uses `touch-action: none`.
@@ -227,9 +258,11 @@ icons only. KiCanvas supports touch pan and pinch natively. The draw catcher use
 ## API
 
 `GET /api/workspace` · `POST /api/workspace/current {id}` · `GET /api/project` · `GET /api/netlist` · `GET /api/check` · `GET /api/lib` · `GET /api/lib/part?id=` · `GET /api/lib/asset?id=&f=symbol_unitN.svg|footprint.svg|part.glb` · `GET /project/<file>` (raw) · `GET /api/3d.glb` · `GET /api/review` ·
-`POST /api/review/comments` · `PATCH /api/review/comments/:id` `{status?, reply?}` · `GET /kretsa/<path>` ·
+`POST /api/review/comments` · `PATCH /api/review/comments/:id` `{status?, reply?}` · `POST /api/review/send` `{ids?}` ·
+`GET /api/diff?since=<rev>` · `GET /api/components` · `?klc=1` on `/api/lib*` · `GET /kretsa/<path>` ·
 `WS /ws` → `{type:"reload", rev, changed[]}` | `{type:"review"}` | `{type:"project", id}` | `{type:"lib"}`
 
 ## Roadmap / known gaps
 
-- Diff overlay: what changed since the `design_rev` of a comment.
+- Drawing on library renders (library comments anchor pins/pads and attach the render, but no ink yet).
+- `kretsa diff` only knows revisions kretsa kept; a git-based fallback would cover older revs.
