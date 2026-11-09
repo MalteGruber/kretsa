@@ -107,7 +107,7 @@ Requirements: [Bun](https://bun.sh) ≥ 1.1, **KiCad 10** (9 untested) with `kic
 to build the vendored KiCanvas once. 2D works without kicad-cli. 3D, checks, netlists and part renders need it.
 
 ```sh
-git clone --recursive https://github.com/<you>/kretsa && cd kretsa
+git clone --recursive https://github.com/MalteGruber/kretsa.git && cd kretsa
 bun install
 bun run build:kicanvas      # one-time: builds the vendored KiCanvas renderer
 bun link                    # puts `kretsa` on your PATH (or use: bun cli/src/main.ts …)
