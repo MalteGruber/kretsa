@@ -1,4 +1,4 @@
-import type { Anchor, Comment, InkShape, ProjectInfo, Review, View } from "../../shared/review";
+import { isDraft, type Anchor, type Comment, type InkShape, type ProjectInfo, type Review, type View } from "../../shared/review";
 import { bboxOf, finishShape, inkMarkup, paintInk, type Tool } from "./ink";
 import { api, connect } from "./api";
 import { itemToAnchor, itemToComponent, KiCanvasView, type Component } from "./kicanvas-view";
@@ -49,7 +49,7 @@ const state = {
   nets: null as NetIndex | null,
   netsRev: "",
   /** Component data per document kind, so 3D picks can show schematic/PCB properties. */
-  comps: {} as Partial<Record<"sch" | "pcb", Component[]>>,
+  comps: {} as Partial<Record<"sch" | "pcb" | "server", Component[]>>,
   draftAnchors: [] as Anchor[],
   draftPoint: null as { kind: View; at: [number, number] } | null,
   commentMode: false,
@@ -156,12 +156,20 @@ async function showMode(mode: Mode, opts: { keepCamera?: boolean } = {}) {
     const host = document.createElement("div");
     host.className = "libhost";
     stages.insertBefore(host, $("#inkbar"));
-    library = mountLibrary(host);
+    library = mountLibrary(host, {
+      onAnchor: addAnchor,
+      onCompose: () => { renderDraftAnchors(); focusComposer(); },
+      comments: () => state.review.comments,
+      onOpenComment: (id) => activateComment(id, { fromPin: true }),
+      onSelection: () => renderDraftAnchors(),
+    });
+    renderDraftAnchors();
     return;
   }
 
   const kinds: View[] = mode === "split" ? ["sch", "pcb"] : [mode];
   state.panes = kinds.map(createPane);
+  renderDraftAnchors();
   stages.classList.toggle("split", mode === "split");
   stages.classList.toggle("has-layerbar", kinds.includes("pcb"));
   for (const p of state.panes) stages.insertBefore(p.el, $("#toolbar"));
@@ -233,8 +241,8 @@ const sheetOf = (pane: Pane | null | undefined) =>
 
 /** Fill in fields missing from one source (e.g. a 3D pick) using schematic + PCB data. */
 function enrich(ref: string, base?: Component | null): Component {
-  const sch = state.comps.sch?.find((c) => c.ref === ref);
-  const pcb = state.comps.pcb?.find((c) => c.ref === ref);
+  const sch = state.comps.sch?.find((c) => c.ref === ref) ?? state.comps.server?.find((c) => c.ref === ref);
+  const pcb = state.comps.pcb?.find((c) => c.ref === ref) ?? state.comps.server?.find((c) => c.ref === ref);
   const b = base ?? sch ?? pcb ?? { ref, value: "", footprint: "", props: [] };
   return {
     ...b,
@@ -572,9 +580,17 @@ function activateComment(id: string, opts: { fromPin?: boolean } = {}) {
   }
   // From the list: navigate to the comment's view and anchor (on phones, get the drawer out of the way).
   if (narrow()) { $("#right").hidden = true; syncPanelButtons(); }
+  if (c.view === "lib") {
+    (async () => {
+      if (state.mode !== "lib") await showMode("lib");
+      if (c.part) await library?.select(c.part);
+    })();
+    return;
+  }
+  const view = c.view;
   (async () => {
-    if (!paneOf(c.view)) await showMode(c.view);
-    const pane = paneOf(c.view)!;
+    if (!paneOf(view)) await showMode(view);
+    const pane = paneOf(view)!;
     setFocus(pane);
     if (c.sheet && pane.kc && sheetOf(pane) !== c.sheet) { pane.kc.setPage(c.sheet); await pane.kc.waitViewer(); }
     if (c.ink_shapes?.length && pane.kc) {
@@ -599,7 +615,8 @@ function activateComment(id: string, opts: { fromPin?: boolean } = {}) {
 const anchorLabel = (a: Anchor): string =>
   a.kind === "symbol" ? a.ref
   : a.kind === "net" ? `net ${a.name}`
-  : a.kind === "pad" ? `${a.ref}.${a.pad}`
+  : a.kind === "pad" ? (a.ref.includes(":") ? `pad ${a.pad}` : `${a.ref}.${a.pad}`)
+  : a.kind === "pin" ? `pin ${a.pin}${a.name ? ` ${a.name}` : ""}`
   : a.kind === "point" ? `@ ${a.at_mm.map((n) => n.toFixed(1)).join(", ")} mm`
   : "area";
 
@@ -617,7 +634,14 @@ function renderDraftAnchors() {
   inkChip.textContent = `✎ drawing (${n})`;
   inkChip.title = "Remove drawing";
   inkChip.onclick = inkClear;
+  const lib = state.mode === "lib" ? library?.selection() : undefined;
+  const ctx = document.createElement("span");
+  ctx.className = "chip ctx";
+  ctx.textContent = lib?.part ? `${lib.part}${lib.aspect ? ` · ${lib.aspect}` : ""}` : "new part request";
+  ctx.title = "What this comment is about (pick a tile or row in the library to change it)";
+  $("#composer textarea").setAttribute("placeholder", lib ? (lib.part ? `Comment on ${lib.part}${lib.aspect ? ` (${lib.aspect})` : ""} for the AI…` : "Describe the part you need: MPN, package, datasheet link…") : "Write a comment for the AI…  (Ctrl+Enter sends)");
   $("#anchors").replaceChildren(
+    ...(lib ? [ctx] : []),
     ...(n ? [inkChip] : []),
     ...state.draftAnchors.map((a, i) => {
       const chip = document.createElement("span");
@@ -644,11 +668,27 @@ function parseExtraAnchors(s: string): Anchor[] {
   });
 }
 
-async function submitComment(form: HTMLFormElement) {
+async function submitComment(form: HTMLFormElement, send = true) {
   const data = new FormData(form);
   const text = String(data.get("text") ?? "").trim();
   if (!text) return;
   const anchors = [...state.draftAnchors, ...parseExtraAnchors(String(data.get("extra") ?? ""))];
+  if (state.mode === "lib" && library) {
+    const sel = library.selection();
+    const c = await api.addComment({
+      view: "lib", anchors, text,
+      ...(sel.part && { part: sel.part }),
+      ...(sel.aspect && { aspect: sel.aspect }),
+      ...(sel.aspect === "3d" && { snapshotPng: library.snapshot3d() }),
+    });
+    if (send) await api.send();
+    form.reset();
+    state.draftAnchors = [];
+    renderDraftAnchors();
+    state.activeComment = c.id;
+    await refreshReview();
+    return;
+  }
   // A dropped pin decides which pane the comment belongs to; otherwise the focused pane.
   const inkPane = state.draftInk ? paneOf(state.draftInk.kind) : undefined;
   const pane = inkPane || (state.draftPoint && paneOf(state.draftPoint.kind)) || state.focus;
@@ -673,6 +713,7 @@ async function submitComment(form: HTMLFormElement) {
     ...(shapes.length && { ink_shapes: shapes }),
     snapshotPng: pane?.three?.snapshot() ?? (pane && (shapes.length || point) ? inkSnapshot(pane, shapes, point) : undefined),
   });
+  if (send) await api.send();
   form.reset();
   state.draftAnchors = [];
   state.draftPoint = null;
@@ -763,6 +804,22 @@ async function gotoViolation(v: Violation) {
 async function refreshReview() {
   state.review = await api.review();
   renderComments();
+  library?.reviewChanged();
+}
+
+async function sendDrafts() {
+  const r = await api.send();
+  await refreshReview();
+  flash(r.sent.length ? `Sent ${r.sent.length} comment${r.sent.length === 1 ? "" : "s"} to the AI` : "Nothing to send");
+}
+
+/** Short status message at the bottom of the screen. */
+function flash(msg: string) {
+  const el = $("#flash");
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout((flash as any).t);
+  (flash as any).t = setTimeout(() => (el.hidden = true), 2500);
 }
 
 function ago(iso: string): string {
@@ -776,6 +833,11 @@ function ago(iso: string): string {
 function renderComments() {
   const open = state.review.comments.filter((c) => c.status === "open").length;
   $("#comment-count").textContent = open ? String(open) : "";
+  const drafts = state.review.comments.filter(isDraft).length;
+  $("#send-ai").hidden = !drafts;
+  $("#send-ai-count").textContent = String(drafts);
+  $("#sendbar").hidden = !drafts;
+  $("#sendbar-text").textContent = `${drafts} draft${drafts === 1 ? "" : "s"} not sent to the AI yet`;
   $("#comment-list").replaceChildren(...visibleComments().slice().reverse().map(renderComment));
 }
 
@@ -789,14 +851,16 @@ function renderComment(c: Comment): HTMLLIElement {
   const closed = c.status === "resolved" || c.status === "wontfix";
   li.className = `card${state.activeComment === c.id ? " active" : ""}${closed ? " closed" : ""}`;
   li.dataset.cid = c.id;
-  const stale = state.project && c.design_rev !== state.project.rev && c.status === "open";
+  const stale = state.project && c.view !== "lib" && c.design_rev !== state.project.rev && c.status === "open";
+  const draft = isDraft(c);
+  const where = c.view === "lib" ? (c.part ? `LIB · ${c.part}${c.aspect ? ` · ${c.aspect}` : ""}` : "NEW PART") : c.view.toUpperCase();
   li.innerHTML = `
     <div class="chead">
       <span class="avatar">You</span>
       <span class="who">You</span>
-      <span class="when">${esc(ago(c.created))} · ${c.view.toUpperCase()}</span>
+      <span class="when">${esc(ago(c.created))} · ${esc(where)}</span>
       <span class="num">#${commentNumber(c)}</span>
-      <span class="status-pill ${c.status}">${c.status}</span>
+      <span class="status-pill ${c.status}${draft ? " draft" : ""}" title="${draft ? "Not sent to the AI yet" : c.status === "open" && c.sent ? `Sent to the AI ${esc(ago(c.sent))}` : ""}">${draft ? "draft" : c.status}</span>
     </div>
     <div class="ctext">${esc(c.text)}</div>
     ${c.ink_shapes?.length ? `<div class="cink">${c.ink_shapes.map((s) => `<div>✎ ${esc(describeShape(s))}</div>`).join("")}</div>` : ""}
@@ -835,6 +899,7 @@ function renderComment(c: Comment): HTMLLIElement {
     li.appendChild(box);
     input.focus();
   });
+  if (draft) btn("Send to AI", async () => { await api.send([c.id]); await refreshReview(); }, "send");
   if (!closed) btn("Resolve", () => patch({ status: "resolved" }), "ok");
   if (c.status !== "open") btn("Reopen", () => patch({ status: "open" }));
   return li;
@@ -929,12 +994,12 @@ function docItem(view: View, path: string, name: string, active: boolean) {
 function renderComponents() {
   const q = $<HTMLInputElement>("#comp-search").value.trim().toLowerCase();
   const kind = focusKind();
-  const comps = (kind === "3d" ? state.comps.pcb ?? state.comps.sch : state.comps[kind]) ?? [];
+  const comps = (kind === "3d" ? state.comps.pcb ?? state.comps.sch ?? state.comps.server : state.comps[kind] ?? state.comps.server) ?? [];
   const items = comps.filter((c) => !q || `${c.ref} ${c.value} ${c.footprint}`.toLowerCase().includes(q));
   const list = $("#comp-list");
   list.innerHTML = items.length
     ? items.map((c) => `<li data-ref="${esc(c.ref)}" class="${state.selectedRef === c.ref ? "active" : ""}"><span class="ref">${esc(c.ref)}</span><span class="val">${esc(c.value)}</span></li>`).join("")
-    : `<li class="group">${kind === "3d" ? "Open Schematic or PCB once to list components" : "No components"}</li>`;
+    : `<li class="group">${state.comps.server ? "No components" : "Loading components…"}</li>`;
   $$<HTMLLIElement>("li[data-ref]", list).forEach((li) => {
     li.onclick = () => { if (narrow()) { $("#left").hidden = true; syncPanelButtons(); } selectRef(li.dataset.ref!, { zoom: true }); };
   });
@@ -1019,10 +1084,13 @@ function bindUi() {
   $("#inkbar [data-ink=done]").onclick = () => { setInkTool(null); if (state.draftInk) focusComposer(); };
 
   const form = $<HTMLFormElement>("#composer");
-  form.onsubmit = (e) => { e.preventDefault(); submitComment(form); };
+  form.onsubmit = (e) => { e.preventDefault(); submitComment(form, true); };
+  $("#composer [data-draft]").onclick = () => submitComment(form, false);
   form.text.addEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submitComment(form); }
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submitComment(form, !e.shiftKey); }
   });
+  $("#send-ai").onclick = sendDrafts;
+  $("#sendbar button").onclick = sendDrafts;
 
   document.addEventListener("keydown", (e) => {
     if ((e.target as HTMLElement).closest("input, textarea")) return;
@@ -1120,6 +1188,7 @@ async function boot() {
       if (msg.type !== "reload") return;
       state.project = await api.project();
       renderStatus();
+      api.components().then((c) => { state.comps.server = c; renderComponents(); }, () => {});
       await loadNetlist();
       if (state.check) loadCheck();
       const kinds = new Set(state.panes.map((p) => (p.kind === "3d" ? "pcb" : p.kind)));
@@ -1132,6 +1201,7 @@ async function boot() {
   );
 
   requestAnimationFrame(updatePins);
+  api.components().then((c) => { state.comps.server = c; renderComponents(); }, () => {});
   await Promise.all([loadNetlist(), showMode(state.mode), refreshReview()]);
 }
 

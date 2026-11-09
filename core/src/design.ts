@@ -158,6 +158,7 @@ export interface SchSymbol {
   power: boolean;
   bbox: Box;
   pins: SchPin[];
+  props: [string, string][];
 }
 
 interface LibSym { pins: { number: string; at: Pt; unit: number; style: number }[]; body: { pts: Pt[]; unit: number; style: number }[]; power: boolean }
@@ -218,6 +219,7 @@ export function parseSheet(text: string, file: string): SchSymbol[] {
       power: !!lib?.power || libId.startsWith("power:"),
       bbox: bbox ?? [at[0] - 2.54, at[1] - 2.54, at[0] + 2.54, at[1] + 2.54],
       pins,
+      props: kids(s, "property").map((p) => [str(p[1]), str(p[2])] as [string, string]).filter(([k, v]) => k && v),
     });
   }
   return out;

@@ -25,6 +25,9 @@
       </nav>
       <div class="topright">
         <span id="status" class="status"></span>
+        <button id="send-ai" class="sendbtn" title="Send your draft comments to the AI agent (it is waiting in kretsa wait)" hidden>
+          <svg viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-8z" /></svg><span class="long">Send to AI</span><b id="send-ai-count"></b>
+        </button>
         <button id="toggle-comments" class="iconbtn" title="Comments">
           <svg viewBox="0 0 24 24"><path d="M4 4h16v12H8l-4 4z" /></svg>
           <span id="comment-count" class="count"></span>
@@ -97,12 +100,14 @@
             <button data-filter="all">All</button>
           </div>
           <ol id="comment-list" class="comments"></ol>
+          <div id="sendbar" class="sendbar" hidden><span id="sendbar-text"></span><button class="primary" type="button">Send to AI</button></div>
           <form id="composer" class="composer">
             <div id="anchors" class="chips"></div>
-            <textarea name="text" rows="3" placeholder="Write a comment for the AI…  (Ctrl+Enter)"></textarea>
+            <textarea name="text" rows="3" placeholder="Write a comment for the AI…  (Ctrl+Enter sends)"></textarea>
             <div class="crow">
               <input name="extra" placeholder="+ anchors: U3, net:VBUS, U3.4" />
-              <button type="submit" class="primary">Post</button>
+              <button type="button" class="secondary" data-draft title="Save as a draft and send several together later (Ctrl+Shift+Enter)">Draft</button>
+              <button type="submit" class="primary" title="Post and send to the AI now, with any drafts (Ctrl+Enter)">Send</button>
             </div>
           </form>
         </div>
@@ -121,6 +126,7 @@
         </div>
       </aside>
     </div>
+    <div id="flash" class="flash" hidden></div>
     <div id="projects" class="overlay" hidden>
       <div class="overlay-box">
         <div class="overlay-head"><h2>Projects</h2><span id="projects-root" class="muted"></span><button id="projects-close" class="iconbtn" title="Close (Esc)">✕</button></div>

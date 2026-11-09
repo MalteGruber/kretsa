@@ -5,11 +5,11 @@
 
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import {
   checkMarkdown, REPORT_VERSION, detectKicadCli, diffChecks, findProjectDir, isProjectDir, mainPcb, matchProject, migrateLegacyDir,
-  projectDirOf, ReviewStore, rootSchematic, runChecks, scanProject, toMarkdown, workspaceInfo, workspaceRoot, writeWorkspaceState,
+  projectDirOf, ReviewStore, commentMarkdown, rootSchematic, runChecks, scanProject, toMarkdown, workspaceInfo, workspaceRoot, writeWorkspaceState,
   footprintDetail, footprintMarkdown, libraryInfo, libraryMarkdown, partDetail, partMarkdown, render3d, renderFootprint, renderPart,
   renderPcb, renderSch, renderBoard3d, renderMarkdown, type RenderResult,
   type LibContext,
@@ -50,7 +50,16 @@ Commands:
               --size PX (1600)   --margin MM   --out DIR (.kretsa/render)
   status    Project files, revision, comments, last check
   review    Open review comments from the human, as markdown (--json: raw review.json)
+  wait      Block until the human presses "Send to AI", then print the comments sent and exit.
+            Run it in the background; when it exits, handle the comments, reply, and start it again.
+              --timeout SEC  give up after SEC (exit 3)   --all  include ones an earlier wait returned
+  reply <comment> "text"   Answer a comment (id, or its number in the viewer: 3 / #3)
+              --addressed  you handled it (the human then resolves or reopens)
+              --wontfix  you won't do it (say why)   --open  keep it open (e.g. you asked a question)
+              Without a flag the status stays as it is. Only the human resolves.
   help      This text
+
+Options for every command: --project/-p <project> (instead of the [project] argument).
 `;
 
 async function main() {
@@ -65,6 +74,8 @@ async function main() {
       issues: { type: "boolean" }, "no-3d": { type: "boolean" }, "no-render": { type: "boolean" }, out: { type: "string" },
       around: { type: "string" }, net: { type: "string" }, sheet: { type: "string" }, side: { type: "string" },
       layers: { type: "string" }, size: { type: "string" }, margin: { type: "string" },
+      project: { type: "string", short: "p" }, addressed: { type: "boolean" }, wontfix: { type: "boolean" }, open: { type: "boolean" },
+      timeout: { type: "string" }, all: { type: "boolean" },
     },
   });
 
@@ -76,15 +87,19 @@ async function main() {
     return serve(root, o);
   }
   if (cmd === "projects") return projects(!!o.json);
+  if (cmd === "lib" && o.project) process.env.KRETSA_PROJECT = (await resolveProject(o.project));
   if (cmd === "use") return use(positionals[0]);
   if (cmd === "lib") return lib(positionals, o);
 
-  const dir = await resolveProject(cmd === "render" ? positionals[1] : positionals[0]);
+  const projectArg = o.project ?? (cmd === "render" ? positionals[1] : cmd === "reply" ? undefined : positionals[0]);
+  const dir = await resolveProject(projectArg);
   await migrateLegacyDir(dir);
   switch (cmd) {
     case "check": return check(dir, o);
     case "status": return status(dir);
     case "render": return render(dir, positionals[0], o);
+    case "wait": return wait(dir, o);
+    case "reply": return reply(dir, positionals[0], positionals.slice(1).join(" "), o);
     case "review": return review(dir, !!o.json);
     default: die(`Unknown command "${cmd}".\n\n${HELP}`);
   }
@@ -264,6 +279,33 @@ async function status(dir: string) {
     "",
   ];
   process.stdout.write(lines.join("\n"));
+}
+
+async function wait(dir: string, o: { timeout?: string; all?: boolean; json?: boolean }) {
+  const store = new ReviewStore(dir);
+  const timeoutMs = o.timeout ? Number(o.timeout) * 1000 : undefined;
+  const got = await store.waitForSent({ timeoutMs, all: o.all });
+  if (!got.length) { process.stderr.write(`No comments sent within ${o.timeout}s.\n`); process.exit(3); }
+  if (o.json) return void process.stdout.write(JSON.stringify(got, null, 1) + "\n");
+  const r = await store.load();
+  const lines = [`# ${got.length} comment${got.length === 1 ? "" : "s"} sent to you · ${basename(dir)}`, ""];
+  for (const c of got) lines.push(...commentMarkdown(c, r.comments.findIndex((x) => x.id === c.id) + 1));
+  lines.push("---", "", "For each: make the change, check it (`kretsa check`, `kretsa render …`), then",
+    "`kretsa reply <#> \"what you did\" --addressed` (or --wontfix with a reason, or a question without a flag).",
+    "Then run `kretsa wait` again (in the background) for the next batch.", "");
+  process.stdout.write(lines.join("\n"));
+}
+
+async function reply(dir: string, ref: string | undefined, text: string, o: { addressed?: boolean; wontfix?: boolean; open?: boolean }) {
+  if (!ref || (!text.trim() && !o.addressed && !o.wontfix && !o.open)) die('Usage: kretsa reply <comment> "text" [--addressed | --wontfix | --open]');
+  const flags = [o.addressed && "addressed", o.wontfix && "wontfix", o.open && "open"].filter(Boolean) as ("addressed" | "wontfix" | "open")[];
+  if (flags.length > 1) die("Pick one of --addressed, --wontfix, --open.");
+  const store = new ReviewStore(dir);
+  const c = await store.find(ref);
+  if (typeof c === "string") die(c);
+  if (c.status === "resolved") die(`${c.id} is resolved by the human; leave it (or ask them to reopen it).`);
+  const updated = await store.patch(c.id, { ...(flags[0] && { status: flags[0] }), ...(text.trim() && { reply: { author: "ai", text: text.trim() } }) });
+  process.stdout.write(`${updated!.id}: ${updated!.status}${text.trim() ? ", reply added" : ""}. The viewer shows it live.\n`);
 }
 
 async function review(dir: string, json: boolean) {

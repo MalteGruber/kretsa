@@ -1,6 +1,7 @@
 import type { CheckReport } from "../../shared/check";
 import type { Netlist } from "../../shared/netlist";
 import type { WorkspaceInfo } from "../../shared/workspace";
+export interface ServerComponent { ref: string; value: string; footprint: string; lib?: string; layer?: string; props: [string, string][] }
 import type { Comment, CommentPatch, NewComment, ProjectInfo, Review, ServerMessage } from "../../shared/review";
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
@@ -22,6 +23,10 @@ export const api = {
   setProject: (id: string) => req<{ current: string }>("POST", "/api/workspace/current", { id }),
   addComment: (c: NewComment) => req<Comment>("POST", "/api/review/comments", c),
   patchComment: (id: string, p: CommentPatch) => req<Comment>("PATCH", `/api/review/comments/${id}`, p),
+  /** "Send to AI": hand drafts to the agent (all, or `ids`). */
+  send: (ids?: string[]) => req<{ sent: string[] }>("POST", "/api/review/send", ids ? { ids } : {}),
+  /** Components parsed server-side from the files (for views without a KiCanvas pane, e.g. 3D only). */
+  components: () => req<ServerComponent[]>("GET", "/api/components"),
 };
 
 /** Auto-reconnecting WebSocket to the server's change feed. */

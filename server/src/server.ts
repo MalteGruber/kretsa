@@ -1,13 +1,14 @@
 // HTTP + WebSocket backend for the web UI. A thin layer over @kretsa/core; started by `kretsa serve`.
 
 import { mkdir, readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { watch as watchFs, type FSWatcher } from "node:fs";
 import {
   detectKicadCli, exportGlb, exportNetlist, migrateLegacyDir, projectDirOf, readWorkspaceState, ReviewStore, rootSchematic,
-  runChecks, safeJoin, scanProject, workspaceInfo, writeWorkspaceState, libraryInfo, partDetail, partAsset, type LibContext,
+  runChecks, safeJoin, readDesign, scanProject, workspaceInfo, writeWorkspaceState, libraryInfo, libraryTables, partDetail, partAsset, svgToPng,
+  type LibContext,
 } from "@kretsa/core";
-import type { CommentPatch, NewComment, ProjectInfo, ServerMessage } from "../../shared/review";
+import type { CommentPatch, NewComment, ProjectInfo, SendRequest, ServerMessage } from "../../shared/review";
 
 const ROOT = resolve(import.meta.dir, "../..");
 
@@ -48,12 +49,14 @@ export async function startServer(opts: ServeOptions) {
     review = new ReviewStore(projectDir);
     project = await scanProject(projectDir, kicadCli);
     watchProject();
+    watchExternalLibs();
     if (opts.persist) await writeWorkspaceState(root, { current: currentId });
     console.log(`[project] ${currentId} (${project.files.length} files)`);
     if (opts.announce) broadcast({ type: "project", id: currentId });
   }
 
   const json = (data: unknown, status = 200) => Response.json(data, { status });
+  const libCtx = (): LibContext => ({ projectDir, tableDirs: [root] });
 
   const server = Bun.serve({
     port,
@@ -105,7 +108,6 @@ export async function startServer(opts: ServeOptions) {
       }
 
       // Libraries: lib tables of the project + workspace root (see core/src/library.ts).
-      const libCtx = (): LibContext => ({ projectDir, tableDirs: [root] });
       if (path === "/api/lib") return json(await libraryInfo(libCtx()));
       if (path === "/api/lib/part" || path === "/api/lib/asset") {
         const part = await partDetail(libCtx(), url.searchParams.get("id") ?? "");
@@ -134,6 +136,22 @@ export async function startServer(opts: ServeOptions) {
         }
       }
 
+      if (path === "/api/components") {
+        const d = await readDesign(project);
+        const byRef = new Map<string, { ref: string; value: string; footprint: string; lib?: string; layer?: string; props: [string, string][] }>();
+        for (const s of d.symbols) {
+          if (s.power) continue;
+          for (const ref of s.refs) if (!ref.startsWith("#")) byRef.set(ref, { ref, value: s.value, footprint: s.footprint, lib: s.lib, props: s.props });
+        }
+        for (const f of d.board?.footprints ?? []) {
+          if (!f.ref) continue;
+          const c = byRef.get(f.ref);
+          if (c) c.layer = f.layer;
+          else byRef.set(f.ref, { ref: f.ref, value: f.value, footprint: f.lib, layer: f.layer, props: [] });
+        }
+        return json([...byRef.values()].sort((a, b) => a.ref.localeCompare(b.ref, undefined, { numeric: true })));
+      }
+
       if (path === "/api/check") {
         const report = await runChecks(project, kicadCli);
         return json(report);
@@ -144,14 +162,33 @@ export async function startServer(opts: ServeOptions) {
       if (path === "/api/review/comments" && req.method === "POST") {
         const body = (await req.json()) as NewComment;
         if (!body?.text?.trim()) return json({ error: "text required" }, 400);
+        // Library comments on the symbol or footprint: attach the render the human was looking at.
+        if (body.view === "lib" && body.part && !body.snapshotPng && (body.aspect === "symbol" || body.aspect === "footprint")) {
+          try {
+            const part = await partDetail(libCtx(), body.part);
+            if (typeof part !== "string") {
+              const svgFile = await partAsset(part, body.aspect === "symbol" ? "symbol_unit1.svg" : "footprint.svg", projectDir);
+              body.snapshotPng = "data:image/png;base64," + svgToPng(await readFile(svgFile, "utf8"), 900).toString("base64");
+            }
+          } catch (e) { console.warn(`[review] no snapshot for ${body.part}: ${(e as Error).message}`); }
+        }
         const c = await review.add(body, project.rev);
         broadcast({ type: "review" });
         return json(c, 201);
       }
 
+      if (path === "/api/review/send" && req.method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as SendRequest;
+        const sent = await review.send(body.ids);
+        broadcast({ type: "review" });
+        return json({ sent: sent.map((c) => c.id) });
+      }
+
       const m = path.match(/^\/api\/review\/comments\/([\w-]+)$/);
       if (m && req.method === "PATCH") {
-        const c = await review.patch(m[1]!, (await req.json()) as CommentPatch);
+        let c;
+        try { c = await review.patch(m[1]!, (await req.json()) as CommentPatch); }
+        catch (e) { return json({ error: (e as Error).message }, 400); }
         if (!c) return json({ error: "not found" }, 404);
         broadcast({ type: "review" });
         return json(c);
@@ -193,13 +230,41 @@ export async function startServer(opts: ServeOptions) {
       if (n === ".kretsa/review.json") reviewChanged = true;
       else if (!n.startsWith(".kretsa/") && /(\.kicad_(sym|mod)|\.(step|stp|wrl)|-lib-table)$/i.test(n)) {
         clearTimeout(libTimer);
-        libTimer = setTimeout(() => broadcast({ type: "lib" }), 300);
+        libTimer = setTimeout(() => { broadcast({ type: "lib" }); if (n.endsWith("-lib-table")) watchExternalLibs(); }, 300);
         return;
       }
       else if (!/\.kicad_(pro|sch|pcb)$/.test(n) || n.startsWith(".kretsa/")) return;
       clearTimeout(timer);
       timer = setTimeout(onChange, 300);
     });
+  }
+
+  // Libraries can live outside the project (a shared hardware folder, registered in a lib table by an
+  // absolute or ${ENV} path). Watch those too; re-evaluated whenever a lib table changes.
+  let libWatchers: FSWatcher[] = [];
+  async function watchExternalLibs() {
+    for (const w of libWatchers) w.close();
+    libWatchers = [];
+    const dirs = new Set<string>();
+    for (const lib of await libraryTables(libCtx()).catch(() => [])) {
+      if (!lib.exists) continue;
+      const dir = lib.kind === "fp" ? lib.path : dirname(lib.path);
+      if (dir === projectDir || dir.startsWith(projectDir + "/")) continue;
+      dirs.add(dir);
+    }
+    const targets: [string, boolean][] = [...dirs].map((d) => [d, true]);
+    if (root !== projectDir) targets.push([root, false]); // the workspace root's own lib tables
+    for (const [dir, recursive] of targets) {
+      try {
+        libWatchers.push(watchFs(dir, { recursive }, (_ev, name) => {
+          const n = String(name ?? "");
+          if (!/(\.kicad_(sym|mod)|\.(step|stp|wrl)|-lib-table)$/i.test(n)) return;
+          clearTimeout(libTimer);
+          libTimer = setTimeout(() => { broadcast({ type: "lib" }); if (n.endsWith("-lib-table")) watchExternalLibs(); }, 300);
+        }));
+      } catch (e) { console.warn(`[lib] can't watch ${dir}: ${(e as Error).message}`); }
+    }
+    if (dirs.size) console.log(`[lib] watching ${dirs.size} library folder(s) outside the project`);
   }
 
   async function onChange() {
@@ -235,6 +300,6 @@ export async function startServer(opts: ServeOptions) {
 
   return {
     server,
-    stop() { projectWatcher?.close(); workspaceWatcher.close(); server.stop(true); },
+    stop() { projectWatcher?.close(); for (const w of libWatchers) w.close(); workspaceWatcher.close(); server.stop(true); },
   };
 }

@@ -4,11 +4,16 @@
 
 export type View = "sch" | "pcb" | "3d";
 export type Status = "open" | "addressed" | "resolved" | "wontfix";
+/** Where a comment was made: a design view, or the library (a part, or a request for a new one). */
+export type CommentView = View | "lib";
+/** Library comments: which side of the part the human was looking at. */
+export type Aspect = "symbol" | "footprint" | "3d";
 
 export type Anchor =
   | { kind: "symbol"; ref: string; uuid?: string; value?: string } // sch symbol or pcb footprint
   | { kind: "net"; name: string }
-  | { kind: "pad"; ref: string; pad: string }
+  | { kind: "pad"; ref: string; pad: string } // design: refdes + pad; library: footprint id + pad
+  | { kind: "pin"; pin: string; name?: string } // library: a symbol pin of the comment's part
   | { kind: "area"; bbox_mm: [number, number, number, number] } // KiCad document coords (mm)
   | { kind: "point"; at_mm: [number, number] };
 
@@ -39,7 +44,10 @@ export interface ThreadEntry {
 export interface Comment {
   id: string;
   status: Status;
-  view: View;
+  view: CommentView;
+  /** Library comments: the part ("Lib:Name"). Absent on a library comment = a request for a new part. */
+  part?: string;
+  aspect?: Aspect;
   file?: string; // project-relative file the comment was made on
   sheet?: string;
   layer?: string;
@@ -51,7 +59,15 @@ export interface Comment {
   design_rev: string;
   thread: ThreadEntry[];
   created: string;
+  /**
+   * When the human handed this comment to the agent ("Send to AI"). Unset = a draft the human may still
+   * change. A human reply or reopen sends again. `kretsa wait` returns comments sent since it last returned.
+   */
+  sent?: string;
 }
+
+/** Open and not handed to the agent yet. */
+export const isDraft = (c: Comment) => c.status === "open" && !c.sent;
 
 export interface Review {
   version: 1;
@@ -83,3 +99,6 @@ export type NewComment = Omit<Comment, "id" | "status" | "design_rev" | "thread"
 };
 
 export type CommentPatch = { status?: Status; reply?: Omit<ThreadEntry, "at"> };
+
+/** Body of POST /api/review/send: send these drafts (default: all drafts). */
+export type SendRequest = { ids?: string[] };
