@@ -4,9 +4,9 @@
 
 KiCad's files stay the single source of truth: the agent edits them, and you watch the result live in your browser. Kretsa
 (Swedish *krets*, "circuit", turned into a verb: *to circuit*) gives both of you tools over the same design. You get a viewer
-for the schematic, PCB and 3D model, where you can inspect, point, draw and comment. The agent gets a CLI with the same reach:
-your comments as structured data and screenshots, design checks that show what its last edit changed, and renders of every
-part it makes.
+for the schematic, PCB, 3D model and parts library, where you can inspect, point, draw, comment, and press **Send to AI**.
+The agent gets a CLI with the same reach: it waits for what you send, reads your comments as structured data and screenshots,
+checks and diffs its own edits, renders the design and every part it makes to look at, and replies in your comment threads.
 
 ![Schematic and PCB side by side, cross-probing the D- net](docs/images/cross-probe.png)
 
@@ -21,18 +21,22 @@ part it makes.
 ## What you get, and what the agent gets
 
 Kretsa gives the agent its own interface to the design: the `kretsa` command line tool. The agent never has to drive KiCad's GUI
-or parse raw s-expressions to understand your feedback. It reads your comments with exact references to parts, nets and pads,
-your drawings already translated into text, and screenshots of what you were looking at. It runs KiCad's own checks and gets the
-full report plus exactly what its last change broke or fixed, and it renders every part it makes so it can look at its own work. Everything comes out
-as markdown written for an LLM (or `--json`), and works on the project files directly, whether or not the viewer is running.
+or parse raw s-expressions to understand your feedback. It waits in the background until you press **Send to AI**, then reads your
+comments with exact references to parts, nets, pins and pads, your drawings already translated into text, and screenshots of what
+you were looking at. It runs KiCad's own checks and gets the full report plus exactly what its last change broke or fixed, lists
+what it changed, renders the board, schematic and every part it makes so it can look at its own work, and answers you in the
+thread. Everything comes out as markdown written for an LLM (or `--json`), and works on the project files directly, whether or
+not the viewer is running.
 
 | | You, in the browser | The agent, on the command line |
 |---|---|---|
 | **See the design** | Schematic, PCB and 3D, live-reloading on every save | `kretsa status`: files, revision, comment counts, last check |
-| **Talk about it** | Select parts and nets, drop pins, draw boxes, arrows and freehand marks, comment | `kretsa review`: your comments with anchors (refdes, nets, pads, mm coordinates), drawings summarized as text (*box around D22, D23*), and cropped screenshots with your ink burned in |
-| **Answer** | Reply, resolve or reopen comment threads | Marks comments `addressed` with a reply in `.kretsa/review.json`; the thread updates live in your browser |
+| **Talk about it** | Select parts and nets, drop pins, draw boxes, arrows and freehand marks, comment; collect drafts, then **Send to AI** | `kretsa wait` returns when you send; `kretsa review`: your comments with anchors (refdes, nets, pads, mm coordinates), drawings summarized as text (*box around D22, D23*), and cropped screenshots with your ink burned in |
+| **Answer** | Reply, resolve or reopen comment threads | `kretsa reply 3 "Moved C12…" --addressed`; the thread updates live in your browser |
+| **Look at it** | The live viewer | `kretsa render pcb --net VBUS`, `render sch --around U3`, `render 3d`: PNGs cropped around what matters, marked in magenta |
+| **What changed** | "What changed?" on a comment: the changes since you wrote it, boxed on the canvas | `kretsa diff`: parts added, moved, re-valued or re-footprinted, pad nets and routing, since its last check or your comment |
 | **Check the design** | Checks tab: ERC/DRC violations, click to jump to the spot | `kretsa check`: the same report as markdown, plus **what its last edit broke or fixed** |
-| **Parts** | Library tab: symbol, footprint and 3D side by side, with health checks | `kretsa lib` / `kretsa lib show`: pin and pad tables, link checks, and PNG renders of symbol, footprint and 3D to look at |
+| **Parts** | Library tab: symbol, footprint and 3D side by side, with health and KLC checks; comment on any of them, click pins and pads, **request a new part** | `kretsa lib show`: pin and pad tables, link checks, and PNG renders to look at; `lib check --klc`; `lib set` for fields |
 | **Projects** | Project picker | `kretsa projects` / `kretsa use`: your browser follows the agent's switch |
 
 ## Features
@@ -102,6 +106,12 @@ resolves, every symbol pin has a pad, a courtyard exists, and a 3D model is pres
 
 ![Library view: symbol, footprint and 3D model of one part](docs/images/library.png)
 
+Parts are made in conversation. Comment on the symbol, the footprint or the 3D model, click pin and pad rows to point at
+them, or press **Request a new part** and describe what you need. The agent gets the part, the view you were looking at as a
+snapshot, and the pins and pads you picked.
+
+![Commenting on a footprint in the Library view](docs/images/library-comment.png)
+
 `kretsa lib show <part>` gives the agent the same information as text (fields, pin table matched against pads, pad table,
 model transform) plus renders to look at:
 
@@ -134,6 +144,15 @@ kretsa serve ~/my-boards    # a folder with one or many KiCad projects
 # → http://localhost:7777 (also on your LAN: http://<your-ip>:7777)
 ```
 
+### Images for the agent
+
+`kretsa render` exports the schematic and board through KiCad and crops them around parts or a net, with what was asked
+for marked, so the agent can check its routing or placement visually instead of guessing from coordinates:
+
+| `kretsa render pcb --net D-` | `kretsa render sch --net D-` |
+|---|---|
+| ![](docs/images/render-pcb-net.png) | ![](docs/images/render-sch-net.png) |
+
 ## Hooking up your agent
 
 kretsa works with any agent that can run shell commands (Claude Code, Codex, Aider, …). Run the agent in your project or workspace
@@ -141,12 +160,14 @@ folder and add something like this to its `CLAUDE.md` / `AGENTS.md`:
 
 ```markdown
 ## Design review (kretsa)
-- The human reviews this design in kretsa. Run `kretsa review` to read open comments (anchors, drawings,
-  snapshot paths: look at the PNGs). Handle each one, then set it to "addressed" with a short reply
-  in `.kretsa/review.json` (rules: docs/review-format.md in the kretsa repo). Never set "resolved".
-- Run `kretsa check` before and after every change. Don't leave NEW violations behind.
-- Make every part yourself in the project libraries. Inspect each one with `kretsa lib show <part>` and
-  look at the renders before using it.
+- The human reviews this design in kretsa. Keep `kretsa wait` running in the background: it returns
+  when they press "Send to AI" and prints their comments (anchors, drawings, snapshot PNGs: look at them).
+  Handle each one, then `kretsa reply <#> "what you did" --addressed`, and start `kretsa wait` again.
+  Never resolve comments. Details: docs/review-format.md in the kretsa repo.
+- Run `kretsa check` before and after every change. Don't leave NEW violations behind. Look at your
+  work with `kretsa render` and `kretsa diff`.
+- Make every part yourself in the project libraries. Inspect each one with `kretsa lib show <part>`
+  (look at the renders) and `kretsa lib check --klc` before using it.
 - Switching boards? `kretsa use <project>`, and the human's viewer follows.
 ```
 
@@ -158,21 +179,28 @@ Your own conventions (field sets, KLC deviations, fab rules) also belong in that
 |---|---|
 | `kretsa serve [dir]` | Web viewer for a workspace or project folder (`--port`, `--host`, `--dev`) |
 | `kretsa projects` / `kretsa use <project>` | List projects / switch the shared current project |
+| `kretsa wait` | Block until the human sends comments, print them, exit (`--timeout`, `--all`) |
+| `kretsa reply <#> "text"` | Answer a comment (`--addressed`, `--wontfix`, `--open`) |
 | `kretsa review` | Open review comments as markdown (`--json` for raw `review.json`) |
 | `kretsa check` | ERC + DRC + schematic parity, with new/fixed since the last run (`--json`, `--fail`) |
+| `kretsa diff [since]` | What changed since the last check, a comment (`diff 3`) or a rev |
+| `kretsa render sch\|pcb\|3d` | PNGs of the design (`--around U3`, `--net VBUS`, `--sheet`, `--side bottom`) |
 | `kretsa status` | Files, revision, comment counts, last check |
 | `kretsa lib [query]` | Parts in the project's libraries, with health checks (`--issues`) |
 | `kretsa lib show <part>` | One part in full, plus symbol / footprint / 3D renders (`--no-3d`) |
+| `kretsa lib check [--klc]` | Every issue of every part; `--klc` adds KiCad Library Convention style rules |
+| `kretsa lib set <part> F=V` | Set symbol fields safely (formatting kept, verified) |
 | `kretsa lib fp <Lib:Name>` | One footprint, including ones no symbol uses |
 
-Output is markdown by default, which suits LLMs, and JSON with `--json`. Everything works on the files directly, so the viewer
+Every command takes `-p <project>`. Output is markdown by default, which suits LLMs, and JSON with `--json`. Everything works on the files directly, so the viewer
 doesn't need to be running.
 
 ## How it works
 
 - **Read-only toward KiCad files.** kretsa never writes `.kicad_sch` / `.kicad_pcb`; only the agent (or you, in KiCad) does.
   Its only output is review data in `<project>/.kretsa/`: `review.json` (the contract), `REVIEW.md`, `snap/*.png`, `ink/*.svg`,
-  plus caches (`cache/`, `check/`, `parts/`). Commit `review.json` if you want the review history in git, and ignore the rest.
+  plus caches and copies (`cache/`, `check/`, `parts/`, `render/`, `revs/` for diffs). The one exception is `kretsa lib set`,
+  which the agent runs to edit symbol fields. Commit `review.json` if you want the review history in git, and ignore the rest.
 - **2D** is rendered in the browser by [KiCanvas](https://github.com/theacodes/kicanvas) (vendored), driven through its internals
   for picking, net highlighting and camera control. **3D** uses `kicad-cli pcb export glb` + three.js.
 - **Checks, netlists and renders** come from `kicad-cli`, cached by file hash. The server watches the project and pushes reloads over
@@ -185,8 +213,8 @@ doesn't need to be running.
 
 ## Status
 
-Early stage. Tested with KiCad 10.0.8 on Linux. KiCad 9 should work but is untested. Known gaps: no diff overlay yet ("what changed since this comment"),
-libraries outside the project folder aren't watched live, and there are no KLC style checks for parts yet.
+Early stage. Tested with KiCad 10.0.8 on Linux. KiCad 9 should work but is untested. Known gaps: you can't draw on library
+renders yet (comments there point at pins and pads), and `kretsa diff` only knows revisions kretsa kept (from comments and checks).
 
 ## Credits
 
