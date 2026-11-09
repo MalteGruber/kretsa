@@ -22,8 +22,8 @@ part it makes.
 
 Kretsa gives the agent its own interface to the design: the `kretsa` command line tool. The agent never has to drive KiCad's GUI
 or parse raw s-expressions to understand your feedback. It reads your comments with exact references to parts, nets and pads,
-your drawings already translated into text, and screenshots of what you were looking at. It runs KiCad's own checks and sees
-only what its last change broke or fixed, and it renders every part it makes so it can look at its own work. Everything comes out
+your drawings already translated into text, and screenshots of what you were looking at. It runs KiCad's own checks and gets the
+full report plus exactly what its last change broke or fixed, and it renders every part it makes so it can look at its own work. Everything comes out
 as markdown written for an LLM (or `--json`), and works on the project files directly, whether or not the viewer is running.
 
 | | You, in the browser | The agent, on the command line |
