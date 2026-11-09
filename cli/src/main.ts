@@ -16,6 +16,7 @@ import {
   type LibContext,
 } from "@kretsa/core";
 import type { CheckReport } from "../../shared/check";
+import type { PartDetail } from "../../shared/library";
 
 const ROOT = resolve(import.meta.dir, "../..");
 
@@ -44,6 +45,8 @@ Commands:
                          --issues  only parts with problems
   lib show <part>      One part: fields, pin table, pad table, 3D model, issues, and renders to look at
                        (symbol, footprint, 3D top/iso/side PNGs)   --no-3d  --no-render
+  lib check [query]    Every issue of every part, as a checklist   --klc  add KiCad Library
+                       Convention style rules (opt-in: your house style may differ)   --fail
   lib fp <Lib:Name>    One footprint (also ones no symbol uses), same detail and renders
   render sch|pcb|3d [project]   Images of the design to look at (PNG, printed paths)
               --around U3[,C7]  crop to parts and mark them   --net VBUS|U3.4  show a net
@@ -78,7 +81,7 @@ async function main() {
       around: { type: "string" }, net: { type: "string" }, sheet: { type: "string" }, side: { type: "string" },
       layers: { type: "string" }, size: { type: "string" }, margin: { type: "string" },
       project: { type: "string", short: "p" }, addressed: { type: "boolean" }, wontfix: { type: "boolean" }, open: { type: "boolean" },
-      timeout: { type: "string" }, all: { type: "boolean" },
+      timeout: { type: "string" }, all: { type: "boolean" }, klc: { type: "boolean" },
     },
   });
 
@@ -139,13 +142,33 @@ async function libContext(): Promise<LibContext> {
   return { projectDir, tableDirs: [ws] };
 }
 
-async function lib(args: string[], o: { json?: boolean; issues?: boolean; "no-3d"?: boolean; "no-render"?: boolean; out?: string }) {
+async function lib(args: string[], o: { json?: boolean; issues?: boolean; "no-3d"?: boolean; "no-render"?: boolean; out?: string; klc?: boolean; fail?: boolean }) {
   const ctx = await libContext();
   const [sub, ref] = args;
+  const copts = { klc: !!o.klc };
+  if (sub === "check") {
+    const info = await libraryInfo(ctx, copts);
+    const parts = info.parts.filter((p) => !ref || p.id.toLowerCase().includes(ref.toLowerCase()));
+    const details: PartDetail[] = [];
+    for (const p of parts) { const d = await partDetail(ctx, p.id, copts); if (typeof d !== "string") details.push(d); }
+    if (o.json) return void process.stdout.write(JSON.stringify(details.map((d) => ({ id: d.id, issues: d.issues })), null, 1) + "\n");
+    const bad = details.filter((d) => d.issues.length);
+    const count = (l: string) => details.reduce((n, d) => n + d.issues.filter((i) => i.level === l).length, 0);
+    const lines = [`# Library check${o.klc ? " (with KLC style rules)" : ""}`, "", `${details.length} parts · ${count("error")} errors · ${count("warning")} warnings · ${count("info")} notes`, ""];
+    for (const d of bad) {
+      lines.push(`## ${d.id}`, "");
+      for (const i of d.issues) lines.push(`- **${i.level}** \`${i.code}\` ${i.text}`);
+      lines.push("");
+    }
+    if (!bad.length) lines.push("No issues.", "");
+    if (!o.klc) lines.push("Add --klc for the KiCad Library Convention style rules (grids, widths, courtyard, pad layers, metadata).", "");
+    if (o.fail && count("error")) { process.stdout.write(lines.join("\n")); process.exit(1); }
+    return void process.stdout.write(lines.join("\n"));
+  }
   const outFor = (id: string) => resolve(o.out ?? join(ctx.projectDir, ".kretsa", "parts", id.replace(/[^\w.+-]+/g, "_")));
   if (sub === "show") {
     if (!ref) die("Usage: kretsa lib show <part>");
-    const part = await partDetail(ctx, ref);
+    const part = await partDetail(ctx, ref, copts);
     if (typeof part === "string") die(part);
     const renders = o["no-render"] ? undefined : await renderPart(part, outFor(part.id), ctx.projectDir, { threeD: !o["no-3d"] });
     if (o.json) return void process.stdout.write(JSON.stringify({ ...part, renders }, null, 1) + "\n");
@@ -164,7 +187,7 @@ async function lib(args: string[], o: { json?: boolean; issues?: boolean; "no-3d
     }
     return void process.stdout.write(o.json ? JSON.stringify(fp, null, 1) + "\n" : lines.join("\n"));
   }
-  const info = await libraryInfo(ctx);
+  const info = await libraryInfo(ctx, copts);
   const query = sub === "list" ? ref : sub;
   if (o.json) return void process.stdout.write(JSON.stringify(info, null, 1) + "\n");
   process.stdout.write(libraryMarkdown(info, { query, issuesOnly: o.issues }));

@@ -8,6 +8,21 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { FootprintDetail, LibraryInfo, LibraryRef, Model, Pad, PartDetail, PartIssue, PartSummary, Pin } from "../../shared/library";
 import { flag, kid, kids, nums, parseSexpr, val, type SExpr } from "./sexpr";
+import { klcFootprint, klcSymbol } from "./klc";
+
+export interface CheckOptions {
+  /** Also run the KLC style checks (core/src/klc.ts). */
+  klc?: boolean;
+}
+
+async function klcIssues(sym: RawSymbol, fp: FootprintDetail | undefined): Promise<PartIssue[]> {
+  const out = klcSymbol(sym.node);
+  if (fp) {
+    const root = parseSexpr(await readFile(fp.file, "utf8"))[0];
+    if (Array.isArray(root)) out.push(...klcFootprint(root, basename(fp.file, ".kicad_mod")));
+  }
+  return out;
+}
 
 const exists = (p: string) => stat(p).then(() => true, () => false);
 
@@ -279,7 +294,7 @@ function summary(lib: LibraryRef, sym: RawSymbol, issues: PartIssue[], hasModel:
 }
 
 /** All parts of all libraries (with checks), plus footprints no symbol uses. */
-export async function libraryInfo(ctx: LibContext): Promise<LibraryInfo> {
+export async function libraryInfo(ctx: LibContext, opts: CheckOptions = {}): Promise<LibraryInfo> {
   const l = await load(ctx);
   const used = new Set<string>();
   const parts: PartSummary[] = [];
@@ -287,7 +302,9 @@ export async function libraryInfo(ctx: LibContext): Promise<LibraryInfo> {
     const fpRef = sym.fields.Footprint ?? "";
     if (fpRef) used.add(fpRef);
     const { fp, problem } = fpRef && !sym.power ? await resolveFootprint(l, fpRef, ctx.projectDir) : {};
-    parts.push(summary(lib, sym, checkPart(sym, fpRef, fp, problem), !!fp?.models.some((m) => m.exists)));
+    const issues = checkPart(sym, fpRef, fp, problem);
+    if (opts.klc) issues.push(...(await klcIssues(sym, fp)));
+    parts.push(summary(lib, sym, issues, !!fp?.models.some((m) => m.exists)));
   }
   const orphanFootprints: string[] = [];
   for (const lib of l.libs.filter((x) => x.kind === "fp" && x.exists)) {
@@ -304,7 +321,7 @@ export async function libraryInfo(ctx: LibContext): Promise<LibraryInfo> {
  * One part in full. `ref` is "Lib:Name", or just "Name" / a unique case-insensitive substring
  * (also matched against Value). Returns an error string if nothing or several parts match.
  */
-export async function partDetail(ctx: LibContext, ref: string): Promise<PartDetail | string> {
+export async function partDetail(ctx: LibContext, ref: string, opts: CheckOptions = {}): Promise<PartDetail | string> {
   const l = await load(ctx);
   const id = (x: Loaded["symbols"][number]) => `${x.lib.name}:${x.sym.name}`;
   let hits = l.symbols.filter((x) => id(x) === ref || x.sym.name === ref);
@@ -319,6 +336,7 @@ export async function partDetail(ctx: LibContext, ref: string): Promise<PartDeta
   const fpRef = sym.fields.Footprint ?? "";
   const { fp, problem } = fpRef && !sym.power ? await resolveFootprint(l, fpRef, ctx.projectDir) : {};
   const issues = checkPart(sym, fpRef, fp, problem);
+  if (opts.klc) issues.push(...(await klcIssues(sym, fp)));
   return {
     ...summary(lib, sym, issues, !!fp?.models.some((m) => m.exists)),
     file: lib.path,

@@ -423,3 +423,5 @@ body.libmode .composer .crow { justify-content: flex-end; }
 .dpart.added { border-left-color: #3fb950; }
 .dpart.removed { border-left-color: #f85149; }
 .droute { color: var(--muted); }
+.partissues li.info { border-left-color: var(--border-strong); color: var(--muted); }
+.liblist .libtoggle { margin-left: 6px; font-size: 12px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }

@@ -108,9 +108,10 @@ export async function startServer(opts: ServeOptions) {
       }
 
       // Libraries: lib tables of the project + workspace root (see core/src/library.ts).
-      if (path === "/api/lib") return json(await libraryInfo(libCtx()));
+      const klc = { klc: url.searchParams.get("klc") === "1" };
+      if (path === "/api/lib") return json(await libraryInfo(libCtx(), klc));
       if (path === "/api/lib/part" || path === "/api/lib/asset") {
-        const part = await partDetail(libCtx(), url.searchParams.get("id") ?? "");
+        const part = await partDetail(libCtx(), url.searchParams.get("id") ?? "", klc);
         if (typeof part === "string") return json({ error: part }, 404);
         if (path === "/api/lib/part") return json(part);
         const file = url.searchParams.get("f") ?? "";

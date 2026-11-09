@@ -46,7 +46,7 @@ export function mountLibrary(host: HTMLElement, hooks: LibraryHooks): LibraryVie
     <div class="libview">
       <aside class="liblist">
         <input class="search" placeholder="Search parts…" />
-        <div class="cfilter"><button data-lf="all" class="active">All</button><button data-lf="issues">Issues</button><span class="libcount muted"></span></div>
+        <div class="cfilter"><button data-lf="all" class="active">All</button><button data-lf="issues">Issues</button><label class="libtoggle" title="Also check the KiCad Library Conventions (style: grids, line widths, courtyard, pad layers)"><input type="checkbox" class="klc" /> KLC</label><span class="libcount muted"></span></div>
         <button class="secondary libnew" title="Ask the agent to make a part: symbol, footprint and 3D model">+ Request a new part</button>
         <ul class="list"></ul>
       </aside>
@@ -61,6 +61,9 @@ export function mountLibrary(host: HTMLElement, hooks: LibraryHooks): LibraryVie
   let three: ThreeView | null = null;
   let seq = 0;
   let aspect: Aspect | undefined;
+  const klcBox = host.querySelector<HTMLInputElement>(".klc")!;
+  klcBox.checked = localStorage.getItem("kretsa:lib:klc") === "1";
+  const klcQ = () => (klcBox.checked ? "&klc=1" : "");
   let request = false;
 
   const setAspect = (a: Aspect | undefined) => {
@@ -133,7 +136,7 @@ export function mountLibrary(host: HTMLElement, hooks: LibraryHooks): LibraryVie
     three = null;
     detail.innerHTML = `<div class="empty">Loading ${esc(id)}…</div>`;
     let p: PartDetail;
-    try { p = await get<PartDetail>(`/api/lib/part?id=${encodeURIComponent(id)}`); }
+    try { p = await get<PartDetail>(`/api/lib/part?id=${encodeURIComponent(id)}${klcQ()}`); }
     catch (e) { detail.innerHTML = `<div class="empty">${esc(String((e as Error).message))}</div>`; return; }
     if (my !== seq) return;
     const asset = (f: string) => `/api/lib/asset?id=${encodeURIComponent(p.id)}&f=${f}&t=${Date.now()}`;
@@ -191,7 +194,7 @@ export function mountLibrary(host: HTMLElement, hooks: LibraryHooks): LibraryVie
   }
 
   async function refresh() {
-    try { info = await get<LibraryInfo>("/api/lib"); }
+    try { info = await get<LibraryInfo>(`/api/lib?x=1${klcQ()}`); }
     catch (e) { detail.innerHTML = `<div class="empty">${esc(String((e as Error).message))}</div>`; return; }
     renderList();
     if (!info.libraries.length) return noLibs();
@@ -201,6 +204,7 @@ export function mountLibrary(host: HTMLElement, hooks: LibraryHooks): LibraryVie
   }
 
   search.oninput = renderList;
+  klcBox.onchange = () => { localStorage.setItem("kretsa:lib:klc", klcBox.checked ? "1" : "0"); refresh(); };
   host.querySelector<HTMLButtonElement>(".libnew")!.onclick = showRequest;
   host.querySelectorAll<HTMLButtonElement>("[data-lf]").forEach((b) => (b.onclick = () => {
     filter = b.dataset.lf as "all" | "issues";
