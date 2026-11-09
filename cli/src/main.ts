@@ -11,7 +11,7 @@ import {
   checkMarkdown, REPORT_VERSION, detectKicadCli, diffChecks, findProjectDir, isProjectDir, mainPcb, matchProject, migrateLegacyDir,
   projectDirOf, ReviewStore, commentMarkdown, rootSchematic, runChecks, scanProject, toMarkdown, workspaceInfo, workspaceRoot, writeWorkspaceState,
   footprintDetail, footprintMarkdown, libraryInfo, libraryMarkdown, partDetail, partMarkdown, render3d, renderFootprint, renderPart,
-  keepRev, diffSince, diffMarkdown, readRev,
+  keepRev, diffSince, setSymbolFields, diffMarkdown, readRev,
   renderPcb, renderSch, renderBoard3d, renderMarkdown, type RenderResult,
   type LibContext,
 } from "@kretsa/core";
@@ -47,6 +47,8 @@ Commands:
                        (symbol, footprint, 3D top/iso/side PNGs)   --no-3d  --no-render
   lib check [query]    Every issue of every part, as a checklist   --klc  add KiCad Library
                        Convention style rules (opt-in: your house style may differ)   --fail
+  lib set <part> Field=Value ...   Set symbol fields safely (formatting kept, verified, atomic);
+                       Field= removes one. For other edits, edit the library files directly.
   lib fp <Lib:Name>    One footprint (also ones no symbol uses), same detail and renders
   render sch|pcb|3d [project]   Images of the design to look at (PNG, printed paths)
               --around U3[,C7]  crop to parts and mark them   --net VBUS|U3.4  show a net
@@ -146,6 +148,23 @@ async function lib(args: string[], o: { json?: boolean; issues?: boolean; "no-3d
   const ctx = await libContext();
   const [sub, ref] = args;
   const copts = { klc: !!o.klc };
+  if (sub === "set") {
+    const fields = args.slice(2);
+    if (!ref || !fields.length) die('Usage: kretsa lib set <part> Field=Value [Field2="Value 2"] [Field=]  (empty value removes the field)');
+    const part = await partDetail(ctx, ref);
+    if (typeof part === "string") die(part);
+    const edits = fields.map((f) => {
+      const i = f.indexOf("=");
+      if (i < 1) die(`"${f}" is not Field=Value`);
+      const v = f.slice(i + 1);
+      return { field: f.slice(0, i), value: v === "" ? null : v };
+    });
+    try {
+      const changed = await setSymbolFields(part.file, part.name, edits);
+      process.stdout.write(changed.length ? `${part.id} (${part.file}):\n${changed.map((c) => `- ${c}`).join("\n")}\n` : `${part.id}: nothing to change.\n`);
+    } catch (e) { die(String((e as Error).message)); }
+    return;
+  }
   if (sub === "check") {
     const info = await libraryInfo(ctx, copts);
     const parts = info.parts.filter((p) => !ref || p.id.toLowerCase().includes(ref.toLowerCase()));

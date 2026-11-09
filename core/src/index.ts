@@ -14,3 +14,4 @@ export * from "./design";
 export * from "./design-render";
 export * from "./diff";
 export * from "./klc";
+export * from "./lib-edit";
