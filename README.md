@@ -20,6 +20,12 @@ part it makes.
 
 ## What you get, and what the agent gets
 
+Kretsa gives the agent its own interface to the design: the `kretsa` command line tool. The agent never has to drive KiCad's GUI
+or parse raw s-expressions to understand your feedback. It reads your comments with exact references to parts, nets and pads,
+your drawings already translated into text, and screenshots of what you were looking at. It runs KiCad's own checks and sees
+only what its last change broke or fixed, and it renders every part it makes so it can look at its own work. Everything comes out
+as markdown written for an LLM (or `--json`), and works on the project files directly, whether or not the viewer is running.
+
 | | You, in the browser | The agent, on the command line |
 |---|---|---|
 | **See the design** | Schematic, PCB and 3D, live-reloading on every save | `kretsa status`: files, revision, comment counts, last check |
@@ -28,9 +34,6 @@ part it makes.
 | **Check the design** | Checks tab: ERC/DRC violations, click to jump to the spot | `kretsa check`: the same report as markdown, plus **what its last edit broke or fixed** |
 | **Parts** | Library tab: symbol, footprint and 3D side by side, with health checks | `kretsa lib` / `kretsa lib show`: pin and pad tables, link checks, and PNG renders of symbol, footprint and 3D to look at |
 | **Projects** | Project picker | `kretsa projects` / `kretsa use`: your browser follows the agent's switch |
-
-Everything the agent sees comes out as markdown (or `--json`), written to be read by an LLM. Nothing needs the viewer to be
-running.
 
 ## Features
 
