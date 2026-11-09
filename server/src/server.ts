@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { watch as watchFs, type FSWatcher } from "node:fs";
 import {
   detectKicadCli, exportGlb, exportNetlist, migrateLegacyDir, projectDirOf, readWorkspaceState, ReviewStore, rootSchematic,
-  runChecks, safeJoin, scanProject, workspaceInfo, writeWorkspaceState,
+  runChecks, safeJoin, scanProject, workspaceInfo, writeWorkspaceState, libraryInfo, partDetail, partAsset, type LibContext,
 } from "@kretsa/core";
 import type { CommentPatch, NewComment, ProjectInfo, ServerMessage } from "../../shared/review";
 
@@ -104,6 +104,24 @@ export async function startServer(opts: ServeOptions) {
         }
       }
 
+      // Libraries: lib tables of the project + workspace root (see core/src/library.ts).
+      const libCtx = (): LibContext => ({ projectDir, tableDirs: [root] });
+      if (path === "/api/lib") return json(await libraryInfo(libCtx()));
+      if (path === "/api/lib/part" || path === "/api/lib/asset") {
+        const part = await partDetail(libCtx(), url.searchParams.get("id") ?? "");
+        if (typeof part === "string") return json({ error: part }, 404);
+        if (path === "/api/lib/part") return json(part);
+        const file = url.searchParams.get("f") ?? "";
+        if (!/^(symbol_unit\d+\.svg|footprint\.svg|part\.glb)$/.test(file)) return json({ error: "bad asset" }, 400);
+        try {
+          const out = await partAsset(part, file, projectDir);
+          if (!(await Bun.file(out).exists())) return json({ error: "not rendered" }, 404);
+          return new Response(Bun.file(out), { headers: { "cache-control": "no-store", "content-type": file.endsWith(".svg") ? "image/svg+xml" : "model/gltf-binary" } });
+        } catch (e) {
+          return json({ error: String((e as Error).message) }, 500);
+        }
+      }
+
       if (path === "/api/netlist") {
         if (!kicadCli) return json({ error: "kicad-cli not installed" }, 503);
         const sch = rootSchematic(project);
@@ -166,12 +184,18 @@ export async function startServer(opts: ServeOptions) {
   // Watch the open project: design file changes -> rescan + reload; external review.json edits (the agent) -> refresh.
   let timer: Timer | undefined;
   let reviewChanged = false;
+  let libTimer: Timer | undefined;
   function watchProject() {
     projectWatcher?.close();
     projectWatcher = watchFs(projectDir, { recursive: true }, (_ev, name) => {
       if (!name) return;
       const n = name.toString();
       if (n === ".kretsa/review.json") reviewChanged = true;
+      else if (!n.startsWith(".kretsa/") && /(\.kicad_(sym|mod)|\.(step|stp|wrl)|-lib-table)$/i.test(n)) {
+        clearTimeout(libTimer);
+        libTimer = setTimeout(() => broadcast({ type: "lib" }), 300);
+        return;
+      }
       else if (!/\.kicad_(pro|sch|pcb)$/.test(n) || n.startsWith(".kretsa/")) return;
       clearTimeout(timer);
       timer = setTimeout(onChange, 300);

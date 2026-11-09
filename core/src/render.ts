@@ -131,3 +131,29 @@ export async function renderPart(part: PartDetail, outDir: string, projectDir: s
   }
   return r;
 }
+
+/**
+ * Web assets for a part, rendered on demand and cached in <project>/.kretsa/parts/<id>/ until the
+ * library or footprint file changes: "symbol_unit<N>.svg", "footprint.svg", or "part.glb".
+ */
+export async function partAsset(part: PartDetail, file: string, projectDir: string): Promise<string> {
+  const { stat } = await import("node:fs/promises");
+  const { exportGlb } = await import("./kicad");
+  const dir = join(projectDir, ".kretsa", "parts", safe(part.id));
+  await mkdir(dir, { recursive: true });
+  const target = join(dir, file);
+  const mtime = async (p: string) => (await stat(p).catch(() => null))?.mtimeMs ?? 0;
+  const sources = Math.max(await mtime(part.file), part.footprintDetail ? await mtime(part.footprintDetail.file) : 0);
+  if (file === "part.glb") {
+    if (!part.footprintDetail) throw new Error("part has no footprint");
+    const board = await scratchBoard(part.footprintDetail, projectDir);
+    const pcb = join(dir, "part.kicad_pcb");
+    await writeFile(pcb, board);
+    const hash = new Bun.CryptoHasher("sha256").update(board).digest("hex").slice(0, 16);
+    return exportGlb(projectDir, pcb, `part-${hash}`);
+  }
+  if ((await mtime(target)) > sources) return target;
+  if (file.startsWith("symbol_unit")) await renderSymbol(part.file, part.name, dir);
+  else if (file === "footprint.svg" && part.footprintDetail) await renderFootprint(part.footprintDetail, dir, projectDir);
+  return target;
+}

@@ -153,6 +153,10 @@ House style (field sets, KLC deviations) is the user's workspace CLAUDE.md's bus
 `<project>/.kretsa/parts/<id>/`: symbol and footprint via `kicad-cli sym|fp export svg` → resvg PNG, and 3D via a scratch board
 (footprint at the origin, model paths absolute, board version = footprint's) → `kicad-cli pcb render` top/iso/side.
 
+The web **Library** mode (`web/src/library-view.ts`, key `5`) shows the same data: a part list with issue badges, and per part the
+symbol and footprint (kicad-cli SVGs, cached in `.kretsa/parts/` until the library file changes), 3D (GLB of the scratch board), and pin/pad/field
+tables. Library file changes inside the project broadcast `{type:"lib"}`. Libraries outside the project dir are not watched yet.
+
 **Checks** (`core/src/check.ts`): `kicad-cli sch erc` and `pcb drc --schematic-parity` (JSON, mm), normalized to `CheckReport`
 (sources: erc, drc, unconnected, parity). Library-lookup types (`lib_symbol_issues`, `footprint_link_issues`, …) are flagged
 `library` and hidden by default. They are noise until project libraries exist. Cached per rev in `.kretsa/check/<rev>.v<N>.json`.
@@ -222,9 +226,9 @@ icons only. KiCanvas supports touch pan and pinch natively. The draw catcher use
 
 ## API
 
-`GET /api/workspace` · `POST /api/workspace/current {id}` · `GET /api/project` · `GET /api/netlist` · `GET /api/check` · `GET /project/<file>` (raw) · `GET /api/3d.glb` · `GET /api/review` ·
+`GET /api/workspace` · `POST /api/workspace/current {id}` · `GET /api/project` · `GET /api/netlist` · `GET /api/check` · `GET /api/lib` · `GET /api/lib/part?id=` · `GET /api/lib/asset?id=&f=symbol_unitN.svg|footprint.svg|part.glb` · `GET /project/<file>` (raw) · `GET /api/3d.glb` · `GET /api/review` ·
 `POST /api/review/comments` · `PATCH /api/review/comments/:id` `{status?, reply?}` · `GET /kretsa/<path>` ·
-`WS /ws` → `{type:"reload", rev, changed[]}` | `{type:"review"}` | `{type:"project", id}`
+`WS /ws` → `{type:"reload", rev, changed[]}` | `{type:"review"}` | `{type:"project", id}` | `{type:"lib"}`
 
 ## Roadmap / known gaps
 

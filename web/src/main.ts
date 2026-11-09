@@ -4,6 +4,7 @@ import { api, connect } from "./api";
 import { itemToAnchor, itemToComponent, KiCanvasView, type Component } from "./kicanvas-view";
 import { NetIndex, type NetSel } from "./nets";
 import type { ThreeView } from "./three-view";
+import { mountLibrary, type LibraryView } from "./library-view";
 import type { CheckReport, Violation } from "../../shared/check";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector<T>(sel)!;
@@ -11,8 +12,8 @@ const $$ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode =
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 /** UI layout: a single view, or schematic + PCB side by side. */
-type Mode = View | "split";
-const MODES: Mode[] = ["sch", "pcb", "3d", "split"];
+type Mode = View | "split" | "lib";
+const MODES: Mode[] = ["sch", "pcb", "3d", "split", "lib"];
 const LABEL: Record<View, string> = { sch: "Schematic", pcb: "PCB", "3d": "3D" };
 
 /** One viewer pane. Split mode has two, which cross-probe each other. */
@@ -30,6 +31,8 @@ interface Pane {
   ink: SVGSVGElement;
   inkKey: string;
 }
+
+let library: LibraryView | null = null;
 
 const state = {
   project: null as ProjectInfo | null,
@@ -138,11 +141,27 @@ async function showMode(mode: Mode, opts: { keepCamera?: boolean } = {}) {
   history.replaceState(null, "", `#${mode}`);
   $$("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.view === mode));
   setCommentMode(false);
+  setInkTool(null);
   for (const p of state.panes) { p.three?.dispose(); p.el.remove(); }
+  library?.dispose();
+  library = null;
+  const stages = $("#stages");
+  stages.classList.toggle("lib", mode === "lib");
+  document.body.classList.toggle("libmode", mode === "lib");
+  stages.querySelector(".libhost")?.remove();
+  if (mode === "lib") {
+    state.panes = [];
+    state.focus = null;
+    stages.classList.remove("split", "has-layerbar");
+    const host = document.createElement("div");
+    host.className = "libhost";
+    stages.insertBefore(host, $("#inkbar"));
+    library = mountLibrary(host);
+    return;
+  }
 
   const kinds: View[] = mode === "split" ? ["sch", "pcb"] : [mode];
   state.panes = kinds.map(createPane);
-  const stages = $("#stages");
   stages.classList.toggle("split", mode === "split");
   stages.classList.toggle("has-layerbar", kinds.includes("pcb"));
   for (const p of state.panes) stages.insertBefore(p.el, $("#toolbar"));
@@ -160,7 +179,7 @@ async function mountPane(pane: Pane, seq: number, saved?: CamState) {
   if (!state.project) return;
   if (pane.kind === "3d") {
     const { mountThree } = await import("./three-view"); // three.js is big; load on demand
-    const tv = await mountThree(pane.viewer, state.project.rev, (a) => onThreePick(pane, a));
+    const tv = await mountThree(pane.viewer, `/api/3d.glb?rev=${state.project.rev}`, (a) => onThreePick(pane, a));
     if (seq !== state.mountSeq) return tv?.dispose();
     pane.three = tv;
     if (state.selectedRef) tv?.highlight(state.selectedRef, !saved);
@@ -1016,7 +1035,7 @@ function bindUi() {
     else if (k === "p") openProjects();
     else if (k === "z") act("zoomsel");
     else if (k === "[") act("left");
-    else if (k >= "1" && k <= "4") showMode(MODES[Number(k) - 1]!);
+    else if (k >= "1" && k <= "5") showMode(MODES[Number(k) - 1]!);
     else if (k === "escape") { closeProjects(); setCommentMode(false); setInkTool(null); state.checkMarker = null; state.activeComment = null; renderComments(); }
   });
 }
@@ -1097,6 +1116,7 @@ async function boot() {
       if (msg.type === "review") return refreshReview();
       // Another project became current (picked here, in another browser, or by the agent): start over.
       if (msg.type === "project") return location.reload();
+      if (msg.type === "lib") return void library?.refresh();
       if (msg.type !== "reload") return;
       state.project = await api.project();
       renderStatus();

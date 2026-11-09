@@ -75,7 +75,8 @@ export interface ProjectInfo {
 export type ServerMessage =
   | { type: "reload"; rev: string; changed: string[] }
   | { type: "review" }
-  | { type: "project"; id: string }; // the current project of the workspace changed
+  | { type: "project"; id: string } // the current project of the workspace changed
+  | { type: "lib" }; // a library file (symbol, footprint, 3D model, lib table) changed
 
 export type NewComment = Omit<Comment, "id" | "status" | "design_rev" | "thread" | "created"> & {
   snapshotPng?: string; // data URL, server stores it to snap/<id>.png

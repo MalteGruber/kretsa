@@ -20,11 +20,11 @@ const HIGHLIGHT = new THREE.Color(0xff7a1a);
 
 export async function mountThree(
   host: HTMLElement,
-  rev: string,
+  url: string,
   onPick: (a: Anchor | null) => void,
 ): Promise<ThreeView | null> {
   host.innerHTML = `<div class="notice">Generating 3D model with kicad-cli…</div>`;
-  const res = await fetch(`/api/3d.glb?rev=${rev}`);
+  const res = await fetch(url);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     host.innerHTML = `<div class="notice">3D unavailable:\n\n${err.error}</div>`;
