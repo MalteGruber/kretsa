@@ -1275,7 +1275,12 @@ async function openProjects() {
   const overlay = $("#projects");
   overlay.hidden = false;
   $("#projects-list").innerHTML = `<li class="empty">Loading…</li>`;
-  const ws = await api.workspace();
+  let ws;
+  try { ws = await api.workspace(); }
+  catch {
+    $("#projects-list").innerHTML = `<li class="empty">Can't reach the kretsa server. It may be restarting; try again in a moment.</li>`;
+    return;
+  }
   $("#projects-root").textContent = ws.root;
   const render = () => {
     const q = $<HTMLInputElement>("#projects-search").value.toLowerCase();
@@ -1299,6 +1304,21 @@ async function openProjects() {
 
 function closeProjects() { $("#projects").hidden = true; }
 
+/** The kretsa server isn't answering: explain, and reload as soon as it is back. */
+function serverDown() {
+  $("#stages").insertAdjacentHTML("afterbegin", `<div class="notice down">
+    <b>Can't reach the kretsa server.</b><br/>It may be restarting, or it was stopped. Start it with
+    <code>kretsa serve &lt;folder&gt;</code>. This page reconnects by itself.</div>`);
+  const poll = async () => {
+    try {
+      const r = await fetch("/api/workspace", { cache: "no-store" });
+      if (r.ok) return location.reload();
+    } catch {}
+    setTimeout(poll, 2000);
+  };
+  setTimeout(poll, 2000);
+}
+
 function openHelp() { $("#help").hidden = false; }
 function closeHelp() { $("#help").hidden = true; }
 
@@ -1312,8 +1332,10 @@ async function boot() {
   $("#help").addEventListener("click", (e) => { if (e.target === $("#help")) closeHelp(); });
   $("#projects").addEventListener("click", (e) => { if (e.target === $("#projects")) closeProjects(); });
   try { state.project = await api.project(); }
-  catch {
-    // Workspace without projects (or the server can't read one): the browser explains.
+  catch (e) {
+    // 404: a workspace without projects; the project browser explains. Anything else (network error, or
+    // the dev proxy's 500/502 while the backend restarts): say so and reload once the server answers.
+    if ((e as { status?: number }).status !== 404) return serverDown();
     connect((m) => { if (m.type === "project") location.reload(); }, () => {});
     return openProjects();
   }

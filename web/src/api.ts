@@ -10,7 +10,7 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
     headers: body ? { "content-type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (!r.ok) throw new Error(`${method} ${url}: ${r.status} ${await r.text()}`);
+  if (!r.ok) throw Object.assign(new Error(`${method} ${url}: ${r.status} ${await r.text()}`), { status: r.status });
   return r.json() as Promise<T>;
 }
 
