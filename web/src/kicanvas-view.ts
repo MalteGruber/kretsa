@@ -271,14 +271,18 @@ export class KiCanvasView {
   }
 
   private pickSchNet(mouse: { x: number; y: number }): boolean {
-    const g = groupAt(this.groups(), [mouse.x, mouse.y], Math.max(0.3, this.pxToMm(5)));
-    if (!g) return false;
+    // Pins get a narrow hit zone (<= 0.6 mm) so clicking a small part's body still selects the part.
+    const hit = groupAt(this.groups(), [mouse.x, mouse.y], Math.max(0.3, this.pxToMm(5)), Math.min(0.6, Math.max(0.3, this.pxToMm(4))));
+    if (!hit) return false;
+    const g = hit.group;
     const groups = g.net ? this.groups().filter((x) => x.net === g.net) : [g];
-    const name = g.net ?? "(unnamed net)";
     const nodes = g.net ? this.nets()?.byName.get(g.net) ?? groupNodes(groups) : groupNodes(groups);
+    const pin = hit.pin ? { ref: hit.pin.node.slice(0, hit.pin.node.lastIndexOf(".")), pin: hit.pin.node.slice(hit.pin.node.lastIndexOf(".") + 1), name: hit.pin.name } : undefined;
+    // No net name (no netlist): an unconnected pin is still worth naming by itself.
+    const name = g.net ?? (pin && groups.every((x) => !x.wires.length && x.pins.length === 1) ? `${hit.pin!.node} (unconnected)` : "(unnamed net)");
     this.quietly(() => this.viewer?.select(null));
     this.showSchNet(g.net, g.net ? undefined : [g]);
-    this.onNet?.({ name, nodes });
+    this.onNet?.({ name, nodes, pin });
     return true;
   }
 

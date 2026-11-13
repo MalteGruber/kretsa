@@ -225,7 +225,10 @@ framed (`ThreeView.highlight`). Components-list clicks, comment cards and 3D pic
 **Net cross-probing** (`selectNet()` in `main.ts`, `web/src/nets.ts`): KiCanvas has no schematic connectivity and only picks
 symbols, so `buildSheetGroups` unions wires, junctions, labels and symbol pins of the displayed sheet geometrically and names each
 group from the kicad-cli netlist (`GET /api/netlist`) by pin votes. Nets are matched between sch and pcb **by shared pins**
-(`U3.4`), with the name as fallback. Click a wire or label (sch), or a track, via or zone fill (pcb) to select a net. A second click on a pad of the
+(`U3.4`), with the name as fallback. Click a wire or label (sch), or a track, via or zone fill (pcb) to select a net. Clicking a symbol pin's line (sch, also
+an unconnected one: lone pins stay in the groups) selects that pin's net with `NetSel.pin` set, so planning without wires still
+cross-probes to the pad; pins have a narrow hit zone (<= 0.6 mm) so a small part's body still selects the part. Composing,
+a pin click anchors the pin (`pad` anchor `U3.12`) plus its net unless that is only the pin's own unconnected net. A second click on a pad of the
 already-selected footprint selects that pad's net. Sch highlight is `div.netlayer`: an SVG (thick strokes over wires, dots at pins/labels) plus a canvas on which
 `paintSchHighlight` repaints the net's own items with KiCanvas' painters in the highlight color, strokes doubled: pins on the net
 (line, name, number: the symbol painter runs with `paint_item` filtered to those PinInstances), net/global/hierarchical labels,

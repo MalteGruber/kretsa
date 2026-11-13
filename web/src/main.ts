@@ -311,7 +311,11 @@ async function selectNet(sel: NetSel | null, opts: { origin?: Pane; zoom?: boole
 
 function onNetPick(pane: Pane, sel: NetSel) {
   const composing = document.activeElement === $("#composer textarea") || $<HTMLTextAreaElement>("#composer textarea").value.trim();
-  if (composing) addAnchor({ kind: "net", name: sel.name });
+  if (composing) {
+    // A clicked pin is anchored as itself (U3.12); its net too, unless it's just the pin's own unconnected net.
+    if (sel.pin) addAnchor({ kind: "pad", ref: sel.pin.ref, pad: sel.pin.pin });
+    if (!sel.pin || sel.nodes.length > 1) addAnchor({ kind: "net", name: sel.name });
+  }
   setFocus(pane);
   setTimeout(() => selectNet(sel, { origin: pane }), 0);
 }
@@ -1039,7 +1043,9 @@ function renderProps() {
   }
   if (s.isNet) {
     const nodes = state.selectedNet?.nodes ?? [];
-    host.innerHTML = `<h3>${esc(s.ref)}</h3><div class="sub">Net · ${nodes.length} pin${nodes.length === 1 ? "" : "s"}</div>
+    const pin = state.selectedNet?.pin;
+    const pinLine = pin ? `<div class="sub">Pin <b>${esc(pin.ref)}.${esc(pin.pin)}</b>${pin.name ? ` (${esc(pin.name)})` : ""}${nodes.length <= 1 ? " · not connected to anything else" : ""}</div>` : "";
+    host.innerHTML = `<h3>${esc(s.ref)}</h3>${pinLine}<div class="sub">Net · ${nodes.length} pin${nodes.length === 1 ? "" : "s"}</div>
       <div class="props-nodes">${nodes.slice().sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
         .map((n) => `<button data-ref="${esc(n.slice(0, n.lastIndexOf(".")))}">${esc(n)}</button>`).join("")}</div>
       <div class="pactions">

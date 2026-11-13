@@ -17,13 +17,15 @@ export interface NetSel {
   name: string;
   /** Pins on the net, "REF.PIN". Empty when unknown. */
   nodes: string[];
+  /** Set when the pick was a symbol pin (also an unconnected one): which pin. */
+  pin?: { ref: string; pin: string; name?: string };
 }
 
 export interface SchGroup {
   net: string | null;
   wires: [Pt, Pt][];
   /** `sym`/`inst`: the KiCanvas symbol and PinInstance, to repaint the pin (line, name, number) highlighted. */
-  pins: { at: Pt; node: string; sym?: any; inst?: any }[];
+  pins: { at: Pt; end: Pt; node: string; name?: string; sym?: any; inst?: any }[];
   /** Label anchor points (local, global, hierarchical, power symbols, sheet pins). */
   labels: Pt[];
   /** KiCanvas items to repaint highlighted: net/global/hierarchical labels, power symbols, sheet pins (ports). */
@@ -81,8 +83,10 @@ const onSeg = (p: Pt, a: Pt, b: Pt) => segDist(p, a, b) < EPS;
  * World position of a symbol pin. Mirrors KiCanvas' PinPainter.apply_symbol_transformations:
  * library coords are y-up; rotate in 90° steps, mirror, then translate (y flipped).
  */
-function pinWorld(sym: any, def: any): Pt {
-  let x: number = def.at.position.x, y: number = def.at.position.y;
+function pinWorld(sym: any, def: any, along = 0): Pt {
+  // along: distance from the connection point toward the body (pin rotation 0 = the pin line extends to +x, y up).
+  const r = ((def.at.rotation ?? 0) * Math.PI) / 180;
+  let x: number = def.at.position.x + along * Math.round(Math.cos(r)), y: number = def.at.position.y + along * Math.round(Math.sin(r));
   const rot = ((Math.round((sym.at.rotation ?? 0) / 90) % 4) + 4) % 4;
   for (let i = 0; i < rot; i++) [x, y] = [-y, x];
   if (sym.mirror === "x") y = -y;
@@ -126,7 +130,7 @@ export function buildSheetGroups(sch: any, nets: NetIndex | null, sheetPath = "/
   // Junctions join crossing wires.
   for (const j of sch?.junctions ?? []) { const p: Pt = [j.at.position.x, j.at.position.y]; attach(p, pointNode(p), true); }
 
-  const pins: { id: number; at: Pt; node: string; power?: string; sym: any; inst: any }[] = [];
+  const pins: { id: number; at: Pt; end: Pt; node: string; name?: string; power?: string; sym: any; inst: any }[] = [];
   for (const sym of sch?.symbols?.values?.() ?? []) {
     let ref: string;
     try { ref = sym.reference; } catch { continue; }
@@ -138,7 +142,9 @@ export function buildSheetGroups(sch: any, nets: NetIndex | null, sheetPath = "/
       const at = pinWorld(sym, def);
       const id = pointNode(at);
       attach(at, id, true);
-      pins.push({ id, at, node: `${ref}.${pin.number}`, power: isPower ? sym.value : undefined, sym, inst: pin });
+      const end = pinWorld(sym, def, Number(def.length ?? 0) || 0);
+      const name = typeof def.name?.text === "string" ? def.name.text : typeof def.name === "string" ? def.name : undefined;
+      pins.push({ id, at, end, node: `${ref}.${pin.number}`, name: name && name !== "~" ? name : undefined, power: isPower ? sym.value : undefined, sym, inst: pin });
     }
   }
 
@@ -177,7 +183,7 @@ export function buildSheetGroups(sch: any, nets: NetIndex | null, sheetPath = "/
   for (const w of wires) group(w.id).wires.push([w.a, w.b]);
   for (const p of pins) {
     const g = group(p.id);
-    g.pins.push({ at: p.at, node: p.node, sym: p.sym, inst: p.inst });
+    g.pins.push({ at: p.at, end: p.end, node: p.node, name: p.name, sym: p.sym, inst: p.inst });
     const n = nets?.byNode.get(p.node);
     if (n) g.votes.set(n, (g.votes.get(n) ?? 0) + 1);
     if (p.power) {
@@ -191,19 +197,28 @@ export function buildSheetGroups(sch: any, nets: NetIndex | null, sheetPath = "/
 
   const out: SchGroup[] = [];
   for (const g of groups.values()) {
-    if (!g.wires.length && g.pins.length < 2 && !g.labels.length) continue; // lone unconnected pin
+    // Lone unconnected pins are kept: clicking one selects it (cross-probing while planning, before wiring).
     const best = [...g.votes].sort((a, b) => b[1] - a[1])[0];
     out.push({ net: best?.[0] ?? g.fallback, wires: g.wires, pins: g.pins, labels: g.labels, labelItems: g.labelItems, powerSyms: g.powerSyms, sheetPins: g.sheetPins });
   }
   return out;
 }
 
-/** The group under `p` (document mm), within `tol` mm of a wire, pin end or label anchor. */
-export function groupAt(groups: SchGroup[], p: Pt, tol: number): SchGroup | null {
-  let best: SchGroup | null = null, bestD = tol;
+/**
+ * The group under `p` (document mm), within `tol` mm of a wire, label anchor, or a symbol pin's line
+ * (then `pin` is that pin, connected or not; power symbols' pins don't count, the symbol is the label).
+ */
+export function groupAt(groups: SchGroup[], p: Pt, tol: number, pinTol = tol): { group: SchGroup; pin?: SchGroup["pins"][number] } | null {
+  let best: { group: SchGroup; pin?: SchGroup["pins"][number] } | null = null, bestD = tol;
   for (const g of groups) {
-    for (const [a, b] of g.wires) { const d = segDist(p, a, b); if (d < bestD) { bestD = d; best = g; } }
-    for (const l of g.labels) { const d = Math.hypot(p[0] - l[0], p[1] - l[1]); if (d < bestD) { bestD = d; best = g; } }
+    for (const [a, b] of g.wires) { const d = segDist(p, a, b); if (d < bestD) { bestD = d; best = { group: g }; } }
+    for (const l of g.labels) { const d = Math.hypot(p[0] - l[0], p[1] - l[1]); if (d < bestD) { bestD = d; best = { group: g }; } }
+  }
+  // Pins win over a wire ending on them only when the click is on the pin line itself (not its end).
+  for (const g of groups) for (const pin of g.pins) {
+    if (pin.node.startsWith("#") || g.powerSyms.includes(pin.sym)) continue;
+    const d = segDist(p, pin.at, pin.end);
+    if (d < pinTol && (d < bestD || Math.hypot(p[0] - pin.at[0], p[1] - pin.at[1]) > tol)) { bestD = Math.min(bestD, d); best = { group: g, pin }; }
   }
   return best;
 }
