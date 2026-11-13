@@ -12,9 +12,73 @@
 
 import type { Anchor, ProjectInfo } from "../../shared/review";
 import { applyTheme, currentTheme, kcColor } from "./kicad-theme";
+import { parseColor } from "../../shared/theme";
 import { buildSheetGroups, groupAt, groupNodes, type NetIndex, type NetSel, type SchGroup } from "./nets";
 
 let loaded: Promise<boolean> | null = null;
+
+/**
+ * Repaint a schematic net's items with KiCanvas' own painters, in the highlight color, into a separate
+ * render layer (not one of the viewer's: it is drawn on our overlay canvas). Pins are painted by running
+ * the symbol painter with paint_item filtered to the net's PinInstances (it sets up the symbol transform);
+ * sheet pins likewise through the sheet painter (it paints them as hierarchical labels).
+ * Strokes are widened so the highlight reads as bold, not just recolored.
+ */
+function paintSchHighlight(v: any, groups: SchGroup[]): any {
+  const vp = v.painter, gfx = v.renderer, theme = v.theme;
+  const hl = parseColor(currentTheme().highlight.net);
+  const keys = ["pin", "pin_name", "pin_number", "label_local", "label_global", "label_hier", "component_outline",
+    "fields", "value", "reference", "wire", "junction", "sheet_label"];
+  const saved = keys.map((k) => { const c = theme[k]; return c ? [c.r, c.g, c.b, c.a] : null; });
+  const L = (name: string) => ({ name });
+  const pinsBySym = new Map<any, Set<any>>();
+  const power = new Set(groups.flatMap((g) => g.powerSyms));
+  for (const g of groups) for (const p of g.pins) {
+    if (!p.sym || !p.inst || power.has(p.sym)) continue;
+    let set = pinsBySym.get(p.sym);
+    if (!set) pinsBySym.set(p.sym, (set = new Set()));
+    set.add(p.inst);
+  }
+  const sheetPins = new Map<any, Set<string>>();
+  for (const g of groups) for (const sp of g.sheetPins) {
+    let set = sheetPins.get(sp.sheet);
+    if (!set) sheetPins.set(sp.sheet, (set = new Set()));
+    set.add(sp.name);
+  }
+  const orig = vp.paint_item;
+  let allow: (item: any) => boolean = () => true;
+  vp.paint_item = function (this: any, layer: any, item: any, ...rest: any[]) {
+    if (!allow(item)) return;
+    return orig.call(this, layer, item, ...rest);
+  };
+  gfx.start_layer("kretsa:net");
+  try {
+    keys.forEach((k) => { const c = theme[k]; if (c) [c.r, c.g, c.b, c.a] = hl; });
+    for (const [sym, pins] of pinsBySym) {
+      const sp = vp.painter_for(sym);
+      if (!sp) continue;
+      allow = (it) => it !== sym.lib_symbol && !(it?.parent === sym && "number" in it && !pins.has(it));
+      sp.paint(L(":Symbol:Pin"), sym);
+      sp.paint(L(":Symbol:Foreground"), sym);
+    }
+    allow = () => true;
+    for (const sym of power) {
+      const sp = vp.painter_for(sym);
+      for (const n of [":Symbol:Foreground", ":Symbol:Pin", ":Symbol:Field"]) sp?.paint(L(n), sym);
+    }
+    for (const g of groups) for (const l of g.labelItems) orig.call(vp, L(":Label"), l);
+    for (const [sheet, names] of sheetPins) {
+      allow = (it) => typeof it?.text !== "string" || names.has(it.text);
+      vp.painter_for(sheet)?.paint(L(":Label"), sheet);
+    }
+  } finally {
+    vp.paint_item = orig;
+    keys.forEach((k, i) => { const c = theme[k], o = saved[i]; if (c && o) [c.r, c.g, c.b, c.a] = o; });
+  }
+  const layer = gfx.end_layer();
+  for (const cmd of layer.commands ?? []) if (cmd.stroke) cmd.stroke_width = Math.max(cmd.stroke_width * 2, 0.3);
+  return layer;
+}
 
 /**
  * KiCanvas' Viewer.draw() queues a requestAnimationFrame per call, so every wheel/touch/drag event
@@ -115,7 +179,7 @@ export class KiCanvasView {
   /** Highlighted net: netlist name (sch) or board net name (pcb). */
   private net: string | null = null;
   private groupsCache: { doc: unknown; nets: unknown; groups: SchGroup[] } | null = null;
-  private overlay: SVGSVGElement | null = null;
+  private overlay: HTMLDivElement | null = null;
   private overlayKey = "";
 
   constructor(
@@ -365,6 +429,7 @@ export class KiCanvasView {
     const v = this.viewer;
     if (!v || !applyTheme(v, this.kind)) return;
     if (this.kind === "pcb" && this.net) this.showPcbNet(this.net);
+    if (this.kind === "sch") { this.setHlItems(null); this.overlayKey = ""; }
     if (this.kind === "pcb" && v.selected) { const s = v.selected; setTimeout(() => { try { v.selected = s; v.draw(); } catch {} }, 0); }
   }
 
@@ -496,35 +561,92 @@ export class KiCanvasView {
     v.draw();
   }
 
-  /** Schematic net highlight: an SVG layer over the canvas, re-projected every frame while active. */
+  /**
+   * Schematic net highlight, re-projected while active (checked every frame, redrawn only on change):
+   * - an SVG layer with thick strokes over the wires and dots at pins/labels, and
+   * - a canvas with the net's own items repainted by KiCanvas in the highlight color: the pins on the net
+   *   (line, name, number), net/global/hierarchical labels, power symbols and sheet pins (ports).
+   * Both sit in div.netlayer, which breathes with a CSS opacity animation (compositor only, no redraws).
+   */
   private ensureOverlay() {
     if (this.kind !== "sch") return;
     if (!this.overlay) {
-      this.overlay = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      this.overlay.classList.add("netlayer");
+      this.overlay = document.createElement("div");
+      this.overlay.className = "netlayer";
+      this.overlay.innerHTML = `<canvas></canvas><svg></svg>`;
       this.host.appendChild(this.overlay);
     }
     if (this.looping) return;
     this.looping = true;
     let first: unknown = null;
+    const svg = this.overlay.querySelector("svg")!;
+    const canvas = this.overlay.querySelector("canvas")!;
     const tick = () => {
       const lit = this.litGroups();
-      if (!lit.length) { this.overlay!.innerHTML = ""; this.overlayKey = ""; this.looping = false; return; }
+      if (!lit.length) {
+        svg.innerHTML = "";
+        this.clearHlCanvas(canvas);
+        this.setHlItems(null);
+        this.overlayKey = "";
+        this.looping = false;
+        return;
+      }
       if (!this.overlay!.isConnected) this.host.appendChild(this.overlay!);
       const cam = this.viewer?.viewport?.camera;
       const k = cam ? `${cam.center.x},${cam.center.y},${cam.zoom},${this.host.clientWidth},${this.host.clientHeight},${lit.length}` : "";
       if (k && (k !== this.overlayKey || lit[0] !== first)) {
+        if (lit[0] !== first || !this.hlItems) this.setHlItems(lit);
         this.overlayKey = k;
         first = lit[0];
         const s = (p: [number, number]) => this.worldToScreen(p[0], p[1]) ?? [0, 0];
         const w = Math.max(3, Math.min(10, 0.6 / this.pxToMm(1)));
         const lines = lit.flatMap((g) => g.wires.map(([a, b]) => { const [x1, y1] = s(a), [x2, y2] = s(b); return `M${x1} ${y1}L${x2} ${y2}`; })).join("");
         const dots = lit.flatMap((g) => [...g.pins.map((p) => p.at), ...g.labels]).map((p) => { const [x, y] = s(p); return `<circle cx="${x}" cy="${y}" r="${w * 0.9}"/>`; }).join("");
-        this.overlay!.innerHTML = `<path d="${lines}" stroke-width="${w}"/>${dots}`;
+        svg.innerHTML = `<path d="${lines}" stroke-width="${w}"/>${dots}`;
+        this.renderHlCanvas(canvas);
       }
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
+  }
+
+  /** KiCanvas render layer holding the highlighted net's items (painted in the highlight color). */
+  private hlItems: any = null;
+
+  private setHlItems(groups: SchGroup[] | null) {
+    try { this.hlItems?.dispose?.(); } catch {}
+    this.hlItems = null;
+    const v = this.viewer;
+    if (!groups?.length || !v?.painter || !v.renderer) return;
+    try { this.hlItems = paintSchHighlight(v, groups); } catch (e) { console.warn("net item highlight failed", e); }
+  }
+
+  private clearHlCanvas(c: HTMLCanvasElement) {
+    if (c.width) c.getContext("2d")?.clearRect(0, 0, c.width, c.height);
+  }
+
+  /** Draw hlItems with the viewer's current camera, by pointing KiCanvas' renderer at our canvas for one call. */
+  private renderHlCanvas(c: HTMLCanvasElement) {
+    const v = this.viewer, layer = this.hlItems;
+    const src: HTMLCanvasElement | undefined = v?.canvas;
+    if (!layer || !src?.width) { this.clearHlCanvas(c); return; }
+    if (c.width !== src.width || c.height !== src.height) { c.width = src.width; c.height = src.height; }
+    const ctx = c.getContext("2d")!;
+    const r = v.renderer, saved = r.ctx2d;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, c.width, c.height);
+    const dpr = src.width / Math.max(1, src.clientWidth);
+    ctx.scale(dpr, dpr);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    try {
+      r.ctx2d = ctx;
+      layer.render(v.viewport.camera.matrix, 0, 1);
+    } catch (e) {
+      console.warn("net item render failed", e);
+    } finally {
+      r.ctx2d = saved;
+    }
   }
   private looping = false;
 

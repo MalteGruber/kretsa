@@ -22,9 +22,14 @@ export interface NetSel {
 export interface SchGroup {
   net: string | null;
   wires: [Pt, Pt][];
-  pins: { at: Pt; node: string }[];
-  /** Label anchor points (local, global, hierarchical, power symbols). */
+  /** `sym`/`inst`: the KiCanvas symbol and PinInstance, to repaint the pin (line, name, number) highlighted. */
+  pins: { at: Pt; node: string; sym?: any; inst?: any }[];
+  /** Label anchor points (local, global, hierarchical, power symbols, sheet pins). */
   labels: Pt[];
+  /** KiCanvas items to repaint highlighted: net/global/hierarchical labels, power symbols, sheet pins (ports). */
+  labelItems: any[];
+  powerSyms: any[];
+  sheetPins: { sheet: any; name: string }[];
 }
 
 /** Netlist with lookups. */
@@ -121,7 +126,7 @@ export function buildSheetGroups(sch: any, nets: NetIndex | null, sheetPath = "/
   // Junctions join crossing wires.
   for (const j of sch?.junctions ?? []) { const p: Pt = [j.at.position.x, j.at.position.y]; attach(p, pointNode(p), true); }
 
-  const pins: { id: number; at: Pt; node: string; power?: string }[] = [];
+  const pins: { id: number; at: Pt; node: string; power?: string; sym: any; inst: any }[] = [];
   for (const sym of sch?.symbols?.values?.() ?? []) {
     let ref: string;
     try { ref = sym.reference; } catch { continue; }
@@ -133,47 +138,62 @@ export function buildSheetGroups(sch: any, nets: NetIndex | null, sheetPath = "/
       const at = pinWorld(sym, def);
       const id = pointNode(at);
       attach(at, id, true);
-      pins.push({ id, at, node: `${ref}.${pin.number}`, power: isPower ? sym.value : undefined });
+      pins.push({ id, at, node: `${ref}.${pin.number}`, power: isPower ? sym.value : undefined, sym, inst: pin });
     }
   }
 
-  const labels: { id: number; at: Pt; name: string | null }[] = [];
+  const labels: { id: number; at: Pt; name: string | null; item: any }[] = [];
   const addLabels = (list: any[], global: boolean) => {
     for (const l of list ?? []) {
       const at: Pt = [l.at.position.x, l.at.position.y];
       const id = pointNode(at);
       attach(at, id, true);
       const text = String(l.shown_text ?? l.text ?? "");
-      labels.push({ id, at, name: nets?.nameForLabel(text, global ? "/" : sheetPath) ?? text });
+      labels.push({ id, at, name: nets?.nameForLabel(text, global ? "/" : sheetPath) ?? text, item: l });
     }
   };
   addLabels(sch?.net_labels, false);
   addLabels(sch?.global_labels, true);
   addLabels(sch?.hierarchical_labels, false);
 
+  // Sheet pins (the ports on a hierarchical sheet's box) connect wires of this sheet too.
+  const sheetPins: { id: number; at: Pt; sheet: any; name: string }[] = [];
+  for (const sheet of sch?.sheets ?? []) for (const sp of sheet.pins ?? []) {
+    if (!sp?.at) continue;
+    const at: Pt = [sp.at.position.x, sp.at.position.y];
+    const id = pointNode(at);
+    attach(at, id, true);
+    sheetPins.push({ id, at, sheet, name: String(sp.name ?? "") });
+  }
+
   // Collect groups.
   const groups = new Map<number, SchGroup & { votes: Map<string, number>; fallback: string | null }>();
   const group = (id: number) => {
     const r = dsu.find(id);
     let g = groups.get(r);
-    if (!g) groups.set(r, (g = { net: null, wires: [], pins: [], labels: [], votes: new Map(), fallback: null }));
+    if (!g) groups.set(r, (g = { net: null, wires: [], pins: [], labels: [], labelItems: [], powerSyms: [], sheetPins: [], votes: new Map(), fallback: null }));
     return g;
   };
   for (const w of wires) group(w.id).wires.push([w.a, w.b]);
   for (const p of pins) {
     const g = group(p.id);
-    g.pins.push({ at: p.at, node: p.node });
+    g.pins.push({ at: p.at, node: p.node, sym: p.sym, inst: p.inst });
     const n = nets?.byNode.get(p.node);
     if (n) g.votes.set(n, (g.votes.get(n) ?? 0) + 1);
-    if (p.power) { g.labels.push(p.at); g.fallback ??= nets?.nameForLabel(p.power) ?? p.power; }
+    if (p.power) {
+      g.labels.push(p.at);
+      if (!g.powerSyms.includes(p.sym)) g.powerSyms.push(p.sym);
+      g.fallback ??= nets?.nameForLabel(p.power) ?? p.power;
+    }
   }
-  for (const l of labels) { const g = group(l.id); g.labels.push(l.at); g.fallback ??= l.name; }
+  for (const l of labels) { const g = group(l.id); g.labels.push(l.at); g.labelItems.push(l.item); g.fallback ??= l.name; }
+  for (const sp of sheetPins) { const g = group(sp.id); g.labels.push(sp.at); g.sheetPins.push({ sheet: sp.sheet, name: sp.name }); }
 
   const out: SchGroup[] = [];
   for (const g of groups.values()) {
     if (!g.wires.length && g.pins.length < 2 && !g.labels.length) continue; // lone unconnected pin
     const best = [...g.votes].sort((a, b) => b[1] - a[1])[0];
-    out.push({ net: best?.[0] ?? g.fallback, wires: g.wires, pins: g.pins, labels: g.labels });
+    out.push({ net: best?.[0] ?? g.fallback, wires: g.wires, pins: g.pins, labels: g.labels, labelItems: g.labelItems, powerSyms: g.powerSyms, sheetPins: g.sheetPins });
   }
   return out;
 }

@@ -238,8 +238,9 @@ button.secondary:hover { background: var(--panel-2); }
 /* Schematic net highlight (KiCanvasView overlay) */
 /* Net highlight (schematic overlay). It breathes so the net stands out; period and color come from the theme file. */
 @keyframes kretsa-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
-.viewer > svg.netlayer { pointer-events: none; overflow: visible; animation: kretsa-breathe var(--breathe, 1.6s) ease-in-out infinite; will-change: opacity; }
-.no-breathe .viewer > svg.netlayer { animation: none; }
+.viewer > .netlayer { pointer-events: none; animation: kretsa-breathe var(--breathe, 1.6s) ease-in-out infinite; will-change: opacity; }
+.netlayer > svg, .netlayer > canvas { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.no-breathe .viewer > .netlayer { animation: none; }
 .netlayer path { fill: none; stroke: var(--net-hl, #ff7a1a); stroke-opacity: 0.8; stroke-linecap: round; stroke-linejoin: round; }
 .netlayer circle { fill: var(--net-hl, #ff7a1a); fill-opacity: 0.9; }
 .props-nodes { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }

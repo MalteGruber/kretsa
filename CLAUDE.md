@@ -226,10 +226,14 @@ framed (`ThreeView.highlight`). Components-list clicks, comment cards and 3D pic
 symbols, so `buildSheetGroups` unions wires, junctions, labels and symbol pins of the displayed sheet geometrically and names each
 group from the kicad-cli netlist (`GET /api/netlist`) by pin votes. Nets are matched between sch and pcb **by shared pins**
 (`U3.4`), with the name as fallback. Click a wire or label (sch), or a track, via or zone fill (pcb) to select a net. A second click on a pad of the
-already-selected footprint selects that pad's net. Sch highlight is an SVG overlay (`svg.netlayer`). PCB uses KiCanvas' native
+already-selected footprint selects that pad's net. Sch highlight is `div.netlayer`: an SVG (thick strokes over wires, dots at pins/labels) plus a canvas on which
+`paintSchHighlight` repaints the net's own items with KiCanvas' painters in the highlight color, strokes doubled: pins on the net
+(line, name, number: the symbol painter runs with `paint_item` filtered to those PinInstances), net/global/hierarchical labels,
+power symbols and sheet pins (ports; also part of the connectivity groups). That render layer is drawn by pointing the renderer's
+`ctx2d` at our canvas for one call, only when the camera or the net changes. PCB uses KiCanvas' native
 `highlight_net`, which shares the overlay layer with the selection box. 3D tints every part on the net. We replace `viewer.on_pick`
 on both viewers. Pads are not in KiCanvas' bbox index, so they are hit-tested by geometry (`padAt`).
-The highlight **breathes** (theme `highlight.breathe_seconds`, 0 = steady): sch via a CSS opacity animation on `svg.netlayer`,
+The highlight **breathes** (theme `highlight.breathe_seconds`, 0 = steady): sch via a CSS opacity animation on `div.netlayer`,
 pcb by pulsing the overlay layer's opacity (~30 redraws/s, only while a net is lit; `paintPcbNet` is KiCanvas' `paint_net` with the
 theme color, since `highlight_net` hard-codes white), 3D by pulsing the emissive intensity. The 3D view renders on demand otherwise.
 
