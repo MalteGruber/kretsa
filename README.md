@@ -125,6 +125,10 @@ The board in 3D comes from `kicad-cli pcb export glb`, and clicking a part selec
 projects. You and the agent share a *current project*: when the agent runs `kretsa use other-board`, your browser follows.
 On a phone, the panels become drawers so you can review from the couch.
 
+**Colors** come from one file per user: schematic colors, every PCB layer (by KiCad layer name: `F.Cu`, `In1.Cu`,
+`B.SilkS`, …), the net highlight color, how fast it breathes, and the 3D background. Run `kretsa theme init` to write it with
+every default (`~/.config/kretsa/theme.json`; `$KRETSA_THEME` moves it), edit, save, and the open viewer recolors.
+
 | | |
 |---|---|
 | ![3D view with a picked connector](docs/images/3d.png) | ![kretsa on a phone](docs/images/phone.png) |
@@ -191,6 +195,7 @@ Your own conventions (field sets, KLC deviations, fab rules) also belong in that
 | `kretsa lib check [--klc]` | Every issue of every part; `--klc` adds KiCad Library Convention style rules |
 | `kretsa lib set <part> F=V` | Set symbol fields safely (formatting kept, verified) |
 | `kretsa lib fp <Lib:Name>` | One footprint, including ones no symbol uses |
+| `kretsa theme [init]` | Where your color file is, and problems in it; `init` writes every default to edit |
 
 Every command takes `-p <project>`. Output is markdown by default, which suits LLMs, and JSON with `--json`. Everything works on the files directly, so the viewer
 doesn't need to be running.

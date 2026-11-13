@@ -2,10 +2,10 @@
 
 import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { watch as watchFs, type FSWatcher } from "node:fs";
+import { watch as watchFs, watchFile, type FSWatcher } from "node:fs";
 import {
   detectKicadCli, exportGlb, exportNetlist, migrateLegacyDir, projectDirOf, readWorkspaceState, ReviewStore, rootSchematic,
-  runChecks, safeJoin, readDesign, keepRev, diffSince, scanProject, workspaceInfo, writeWorkspaceState, libraryInfo, libraryTables, partDetail, partAsset, svgToPng,
+  runChecks, safeJoin, readTheme, themePath, readDesign, keepRev, diffSince, scanProject, workspaceInfo, writeWorkspaceState, libraryInfo, libraryTables, partDetail, partAsset, svgToPng,
   type LibContext,
 } from "@kretsa/core";
 import type { CommentPatch, NewComment, ProjectInfo, SendRequest, ServerMessage } from "../../shared/review";
@@ -193,6 +193,7 @@ export async function startServer(opts: ServeOptions) {
       }
 
       if (path === "/api/agent") return json(await review.agentWaiting());
+      if (path === "/api/theme") return json(readTheme());
 
       const m = path.match(/^\/api\/review\/comments\/([\w-]+)$/);
       if (m && req.method === "DELETE") {
@@ -234,6 +235,9 @@ export async function startServer(opts: ServeOptions) {
   function broadcast(msg: ServerMessage) {
     server.publish("all", JSON.stringify(msg));
   }
+
+  // The color preference file lives outside the workspace (and may not exist yet): poll its stat.
+  watchFile(themePath(), { interval: 1000 }, () => broadcast({ type: "theme" }));
 
   // Watch the open project: design file changes -> rescan + reload; external review.json edits (the agent) -> refresh.
   let timer: Timer | undefined;

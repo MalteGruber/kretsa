@@ -4,6 +4,7 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { Anchor } from "../../shared/review";
+import { currentTheme } from "./kicad-theme";
 
 const REFDES = /^[A-Z]{1,4}\d+[A-Z]?$/;
 
@@ -13,10 +14,11 @@ export interface ThreeView {
   highlight(ref: string | string[] | null, frame?: boolean): void;
   /** Reset the camera to frame the whole board. */
   fit(): void;
+  /** Re-read colors from the current theme. */
+  applyTheme(): void;
   dispose(): void;
 }
 
-const HIGHLIGHT = new THREE.Color(0xff7a1a);
 
 export async function mountThree(
   host: HTMLElement,
@@ -35,7 +37,7 @@ export async function mountThree(
   const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(devicePixelRatio);
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x1f1f1f);
+  scene.background = new THREE.Color(currentTheme()["3d"].background);
   scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 2));
   const sun = new THREE.DirectionalLight(0xffffff, 2);
   sun.position.set(1, 2, 1.5);
@@ -56,6 +58,10 @@ export async function mountThree(
   controls.update();
   const home = { pos: camera.position.clone(), target: controls.target.clone() };
   const fit = () => { camera.position.copy(home.pos); controls.target.copy(home.target); controls.update(); };
+  // Render on demand (camera moved, resize, highlight), not every frame: an idle 3D view costs nothing.
+  let dirty = true;
+  const invalidate = () => { dirty = true; };
+  controls.addEventListener("change", invalidate);
 
   host.replaceChildren(renderer.domElement);
 
@@ -66,6 +72,7 @@ export async function mountThree(
     renderer.domElement.style.height = "100%";
     camera.aspect = w / Math.max(h, 1);
     camera.updateProjectionMatrix();
+    invalidate();
   };
   const ro = new ResizeObserver(resize);
   ro.observe(host);
@@ -95,10 +102,14 @@ export async function mountThree(
   const nodesByRef = new Map<string, THREE.Object3D>();
   model.traverse((o) => { if (REFDES.test(o.name) && !nodesByRef.has(o.name)) nodesByRef.set(o.name, o); });
   let highlighted: THREE.Mesh[] = [];
+  let tinted: THREE.MeshStandardMaterial[] = [];
 
   const highlight = (ref: string | string[] | null, frame = false) => {
     for (const m of highlighted) m.material = m.userData.origMaterial;
     highlighted = [];
+    tinted = [];
+    invalidate();
+    const hl = new THREE.Color(currentTheme().highlight.net);
     const nodes = (ref == null ? [] : Array.isArray(ref) ? ref : [ref]).map((r) => nodesByRef.get(r)).filter((n): n is THREE.Object3D => !!n);
     if (!nodes.length) return;
     for (const node of nodes) node.traverse((o) => {
@@ -107,8 +118,8 @@ export async function mountThree(
       m.userData.origMaterial ??= m.material;
       const tint = (mat: THREE.Material) => {
         const c = mat.clone() as THREE.MeshStandardMaterial;
-        if (c.emissive) { c.emissive = HIGHLIGHT.clone(); c.emissiveIntensity = 0.6; }
-        else if ((c as any).color) (c as any).color = HIGHLIGHT.clone();
+        if (c.emissive) { c.emissive = hl.clone(); c.emissiveIntensity = 0.6; tinted.push(c); }
+        else if ((c as any).color) (c as any).color = hl.clone();
         return c;
       };
       m.material = Array.isArray(m.material) ? m.material.map(tint) : tint(m.material);
@@ -127,17 +138,32 @@ export async function mountThree(
   };
 
   let running = true;
-  const loop = () => {
+  let lastBreath = 0;
+  const loop = (t: number) => {
     if (!running) return;
-    renderer.render(scene, camera);
+    // The highlight breathes (emissive intensity), like the net highlight on the 2D canvases.
+    const period = currentTheme().highlight.breathe_seconds;
+    if (tinted.length && period > 0 && t - lastBreath >= 33) {
+      lastBreath = t;
+      const k = 0.15 + 0.75 * (0.5 + 0.5 * Math.cos((t / 1000 / period) * 2 * Math.PI));
+      for (const m of tinted) m.emissiveIntensity = k;
+      dirty = true;
+    }
+    if (dirty) { dirty = false; renderer.render(scene, camera); }
     requestAnimationFrame(loop);
   };
-  loop();
+  requestAnimationFrame(loop);
 
   return {
     snapshot: () => renderer.domElement.toDataURL("image/png"),
     highlight,
-    fit,
+    fit: () => { fit(); invalidate(); },
+    applyTheme: () => {
+      scene.background = new THREE.Color(currentTheme()["3d"].background);
+      const hl = new THREE.Color(currentTheme().highlight.net);
+      for (const m of tinted) m.emissive = hl.clone();
+      invalidate();
+    },
     dispose: () => {
       running = false;
       ro.disconnect();

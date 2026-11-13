@@ -11,10 +11,32 @@
 //   app.project.pages(), project.set_active_page(page)
 
 import type { Anchor, ProjectInfo } from "../../shared/review";
-import { applyDarkTheme } from "./kicad-theme";
+import { applyTheme, currentTheme, kcColor } from "./kicad-theme";
 import { buildSheetGroups, groupAt, groupNodes, type NetIndex, type NetSel, type SchGroup } from "./nets";
 
 let loaded: Promise<boolean> | null = null;
+
+/**
+ * KiCanvas' Viewer.draw() queues a requestAnimationFrame per call, so every wheel/touch/drag event
+ * becomes a full redraw, often many per frame (measured: ~20 per frame on a wheel burst), and a
+ * slow frame makes the backlog worse. Patch the base class (the prototype owning both draw and
+ * on_draw) once so draws coalesce into one per frame.
+ */
+function coalesceDraws(v: any) {
+  const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
+  let proto = Object.getPrototypeOf(v);
+  while (proto && !(own(proto, "draw") && own(proto, "on_draw"))) proto = Object.getPrototypeOf(proto);
+  if (!proto || proto.__kretsaCoalesced) return;
+  proto.__kretsaCoalesced = true;
+  proto.draw = function (this: any) {
+    if (!this.viewport || this.__kretsaDrawQueued) return;
+    this.__kretsaDrawQueued = true;
+    requestAnimationFrame(() => {
+      this.__kretsaDrawQueued = false;
+      this.on_draw();
+    });
+  };
+}
 
 export function loadKiCanvas(): Promise<boolean> {
   // KiCanvas reads its preferences from localStorage at module load (the embed's `theme` attribute is
@@ -142,7 +164,8 @@ export class KiCanvasView {
     // The viewer is a plain EventTarget (not a DOM node), so its events never reach `document`.
     if (v && v !== this.listenedViewer) {
       this.listenedViewer = v;
-      applyDarkTheme(v, this.kind);
+      coalesceDraws(v);
+      applyTheme(v, this.kind);
       v.addEventListener("kicanvas:select", (e: CustomEvent) => { if (!this.quiet) this.onSelect?.(e.detail?.item ?? null); });
       // Replace KiCanvas' click handling: it only picks symbols (sch) and pops a chooser menu for
       // footprint-vs-net (pcb), and ignores wires, labels and zones.
@@ -284,9 +307,65 @@ export class KiCanvasView {
     // setTimeout(0), so paint the net after that.
     setTimeout(() => {
       if (this.net !== name || this.viewer !== v) return;
-      if (num) v.highlight_net(num);
+      if (num) this.paintPcbNet(v, num);
       else { v.layers.overlay.clear(); v.draw(); }
     }, 0);
+  }
+
+  /**
+   * KiCanvas' highlight_net(), but in the theme's highlight color: paint every item on the net
+   * (pads, tracks, arcs, vias, zone fills) into the overlay layer. highlight_net hard-codes white.
+   */
+  private paintPcbNet(v: any, num: number) {
+    const p = v.painter, layer = v.layers?.overlay;
+    try {
+      p.filter_net = num;
+      layer.clear();
+      layer.color = kcColor(v, currentTheme().highlight.net);
+      p.gfx.start_layer(layer.name);
+      for (const item of v.board.items()) if (p.painter_for(item)) p.paint_item(layer, item);
+      layer.graphics = p.gfx.end_layer();
+      layer.graphics.composite_operation = "overlay";
+    } catch (e) {
+      console.warn("net paint failed, using KiCanvas' highlight", e);
+      p.filter_net = null;
+      v.highlight_net(num);
+    } finally {
+      if (p) p.filter_net = null;
+    }
+    v.draw();
+    this.breathe();
+  }
+
+  /** PCB: pulse the net overlay's opacity while a net is highlighted (~30 redraws/s; the schematic uses CSS). */
+  private breatheRaf = 0;
+  private breathe() {
+    if (this.breatheRaf || this.kind !== "pcb") return;
+    let last = 0;
+    const tick = (t: number) => {
+      const v = this.viewer;
+      const period = currentTheme().highlight.breathe_seconds;
+      const overlay = v?.layers?.overlay;
+      if (!this.net || !overlay || !(period > 0)) {
+        this.breatheRaf = 0;
+        if (overlay && overlay.opacity !== 1) { overlay.opacity = 1; v.draw(); }
+        return;
+      }
+      this.breatheRaf = requestAnimationFrame(tick);
+      if (t - last < 33) return;
+      last = t;
+      overlay.opacity = 0.25 + 0.75 * (0.5 + 0.5 * Math.cos((t / 1000 / period) * 2 * Math.PI));
+      v.draw();
+    };
+    this.breatheRaf = requestAnimationFrame(tick);
+  }
+
+  /** The theme file changed: recolor and repaint (repainting drops the net overlay, so redo it). */
+  refreshTheme() {
+    const v = this.viewer;
+    if (!v || !applyTheme(v, this.kind)) return;
+    if (this.kind === "pcb" && this.net) this.showPcbNet(this.net);
+    if (this.kind === "pcb" && v.selected) { const s = v.selected; setTimeout(() => { try { v.selected = s; v.draw(); } catch {} }, 0); }
   }
 
   private showSchNet(name: string | null, groups?: SchGroup[]) {

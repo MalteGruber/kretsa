@@ -7,6 +7,7 @@ import type { ThreeView } from "./three-view";
 import { mountLibrary, type LibraryView } from "./library-view";
 import type { CheckReport, Violation } from "../../shared/check";
 import type { DesignDiff } from "../../shared/diff";
+import { setTheme } from "./kicad-theme";
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector<T>(sel)!;
 const $$ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => [...root.querySelectorAll<T>(sel)];
@@ -101,10 +102,18 @@ function createPane(kind: View): Pane {
     ink: el.querySelector<SVGSVGElement>(".inklayer")!, inkKey: "",
   };
   el.addEventListener("pointerdown", () => setFocus(pane), true);
+  // Coordinate readout: at most once per frame, so its text write doesn't force a layout per event.
+  let coordEv: PointerEvent | null = null;
   el.addEventListener("pointermove", (e) => {
-    const r = pane.viewer.getBoundingClientRect();
-    const w = pane.kc?.screenToWorld(e.clientX - r.left, e.clientY - r.top);
-    pane.coords.textContent = w ? `X ${w[0].toFixed(2)}  Y ${w[1].toFixed(2)} mm` : "";
+    if (!coordEv) requestAnimationFrame(() => {
+      const ev = coordEv!;
+      coordEv = null;
+      const r = pane.viewer.getBoundingClientRect();
+      const w = pane.kc?.screenToWorld(ev.clientX - r.left, ev.clientY - r.top);
+      const t = w ? `X ${w[0].toFixed(2)}  Y ${w[1].toFixed(2)} mm` : "";
+      if (pane.coords.textContent !== t) pane.coords.textContent = t;
+    });
+    coordEv = e;
   });
   el.addEventListener("pointerleave", () => (pane.coords.textContent = ""));
   bindInk(pane);
@@ -573,8 +582,9 @@ function updatePanePins(pane: Pane) {
     want.add(key);
     let el = pane.pinEls.get(key);
     if (!el) { el = make(); pane.pinEls.set(key, el); pane.pins.appendChild(el); }
-    el.style.left = `${s[0]}px`;
-    el.style.top = `${s[1]}px`;
+    // transform, not left/top: moving pins while panning then needs no layout.
+    const tr = `translate(${s[0].toFixed(1)}px, ${s[1].toFixed(1)}px) translate(-50%, -100%)`;
+    if (el.style.transform !== tr) el.style.transform = tr;
     return el;
   };
   for (const c of visibleComments()) {
@@ -585,9 +595,10 @@ function updatePanePins(pane: Pane) {
       return e;
     });
     if (el) {
-      el.className = `pin ${c.status}${state.activeComment === c.id ? " active" : ""}`;
-      el.textContent = String(commentNumber(c));
-      el.title = c.text;
+      const cls = `pin ${c.status}${state.activeComment === c.id ? " active" : ""}`, num = String(commentNumber(c));
+      if (el.className !== cls) el.className = cls;
+      if (el.textContent !== num) el.textContent = num;
+      if (el.title !== c.text) el.title = c.text;
     }
   }
   if (state.checkMarker?.kind === pane.kind) {
@@ -856,6 +867,23 @@ async function sendDrafts() {
 }
 
 /** Short status message at the bottom of the screen. */
+/** Colors from the user's theme file (`kretsa theme`). live: the file changed while the page is open. */
+async function loadTheme(live: boolean) {
+  let info;
+  try { info = await api.theme(); } catch { return; }
+  setTheme(info.theme);
+  if (info.warnings.length) {
+    console.warn(`kretsa theme (${info.path}):\n` + info.warnings.join("\n"));
+    flash(`Theme file: ${info.warnings.length} problem${info.warnings.length > 1 ? "s" : ""} (run kretsa theme)`);
+  } else if (live) flash("Colors updated");
+  if (!live) return;
+  for (const p of state.panes) {
+    p.kc?.refreshTheme();
+    p.three?.applyTheme();
+    if (p.kind === "pcb") setTimeout(() => renderLayers(p), 50);
+  }
+}
+
 function flash(msg: string) {
   const el = $("#flash");
   el.textContent = msg;
@@ -1339,6 +1367,7 @@ async function boot() {
     connect((m) => { if (m.type === "project") location.reload(); }, () => {});
     return openProjects();
   }
+  await loadTheme(false);
   $("#project-name").textContent = state.project.name;
   document.title = `${state.project.name} · kretsa`;
   renderStatus();
@@ -1351,6 +1380,7 @@ async function boot() {
       if (msg.type === "project") return location.reload();
       if (msg.type === "lib") return void library?.refresh();
       if (msg.type === "agent") return void loadAgent();
+      if (msg.type === "theme") return void loadTheme(true);
       if (msg.type !== "reload") return;
       state.project = await api.project();
       renderStatus();

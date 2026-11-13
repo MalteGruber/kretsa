@@ -142,6 +142,7 @@ kretsa wait | reply <#> "…" --addressed   # the agent's side of Send to AI
 kretsa diff [since] | render sch|pcb|3d [--around U3] [--net X]   # what changed / images to look at
 kretsa lib check [--klc] | lib set <part> F=V                     # part lint / safe field edits
 kretsa lib [query] | lib show <part> | lib fp <Lib:Name>   # parts, detail + renders (PNG) for the agent
+kretsa theme [init]                 # the user's color file (~/.config/kretsa/theme.json): layers, schematic, highlight
 bun run typecheck
 ```
 
@@ -155,7 +156,7 @@ kretsa is generic (open source): personal standards and preferences belong in th
 
 Servers listen on all interfaces (LAN: `http://<lan-ip>:7777`, or `:5177` in dev). **There is no auth**, so use trusted networks only.
 `--host 127.0.0.1` / `KRETSA_HOST` keeps it local. Env vars: `KRETSA_PROJECT`, `KRETSA_PORT` (7777), `KRETSA_HOST`,
-`KICAD_CLI` (defaults to `kicad-cli` on PATH).
+`KICAD_CLI` (defaults to `kicad-cli` on PATH), `KRETSA_THEME` (color file).
 
 **Libraries** (`core/src/library.ts`, `render.ts`, `library-md.ts`; types in `shared/library.ts`): only libraries in the
 `sym-lib-table`/`fp-lib-table` of the project and the workspace root. KiCad's global tables and stock libraries are deliberately
@@ -206,7 +207,11 @@ pad nets and routing (`kretsa diff`, `GET /api/diff?since=`).
 ## UI
 
 Colors follow VS Code "Dark Modern" (CSS vars in `style.css`). The KiCanvas canvases are recolored at runtime by
-`kicad-theme.ts`, because KiCanvas has no theme API: it mutates its shared Color objects, then calls `paint()`. Layout borrows from enterprise EDA web viewers. The top bar has view tabs (Schematic | PCB | 3D). The left panel has
+`kicad-theme.ts`, because KiCanvas has no theme API: it mutates its shared Color objects, then calls `paint()`.
+**Canvas colors are user preferences**: `shared/theme.ts` (defaults, `resolveTheme`: board keys are KiCad layer names or KiCanvas
+theme keys, normalized to theme paths like `copper.f`), `core/src/theme.ts` (`$KRETSA_THEME`, else `~/.config/kretsa/theme.json`;
+`kretsa theme [init]`), `GET /api/theme`; the server polls the file and broadcasts `{type:"theme"}`, and the page re-applies
+(`KiCanvasView.refreshTheme`, `ThreeView.applyTheme`). Also `highlight.net` / `selection` / `breathe_seconds` and `3d.background`. Layout borrows from enterprise EDA web viewers. The top bar has view tabs (Schematic | PCB | 3D). The left panel has
 Documents and Components (searchable). The right panel has Comments, Properties of the selection, and Checks (ERC/DRC list; click to jump to the location, marked `!`). A floating
 toolbar sits at the bottom (Fit, Zoom to selection, Comment mode, Draw, Toggle panel), and the PCB view has a layer bar
 (click focuses a layer, right-click shows or hides it). Comments appear as numbered pins on the canvas and follow
@@ -224,6 +229,9 @@ group from the kicad-cli netlist (`GET /api/netlist`) by pin votes. Nets are mat
 already-selected footprint selects that pad's net. Sch highlight is an SVG overlay (`svg.netlayer`). PCB uses KiCanvas' native
 `highlight_net`, which shares the overlay layer with the selection box. 3D tints every part on the net. We replace `viewer.on_pick`
 on both viewers. Pads are not in KiCanvas' bbox index, so they are hit-tested by geometry (`padAt`).
+The highlight **breathes** (theme `highlight.breathe_seconds`, 0 = steady): sch via a CSS opacity animation on `svg.netlayer`,
+pcb by pulsing the overlay layer's opacity (~30 redraws/s, only while a net is lit; `paintPcbNet` is KiCanvas' `paint_net` with the
+theme color, since `highlight_net` hard-codes white), 3D by pulsing the emissive intensity. The 3D view renders on demand otherwise.
 
 **Drawing** (`ink.ts`, `bindInk` in `main.ts`): pen, box and arrow strokes on sch/pcb, stored in document mm. On post, each shape is
 summarized into `ink_shapes`: `covers` = parts enclosed by a box or loop, or touched by an open stroke; arrows get `from_ref`/`to_ref`.
@@ -256,6 +264,10 @@ icons only. KiCanvas supports touch pan and pinch natively. The draw catcher use
 - KiCanvas's `@no_self_recursion` decorator uses **one flag per method shared by all viewer instances**. Calling
   `otherViewer.select()` from inside a `kicanvas:select` handler is silently dropped, so defer it (`setTimeout`).
   Programmatic selects are made "quiet" in `KiCanvasView` so they don't echo back as user selections.
+- `Viewer.draw()` queues one `requestAnimationFrame` per call, so every wheel/touch/drag event was a full redraw, often
+  many per frame (measured ~20 on a wheel burst). `coalesceDraws` (kicanvas-view.ts) patches the base Viewer prototype once
+  so draws coalesce to one per frame. Avoid per-frame DOM writes in overlays (pins move by `transform`, only on change):
+  KiCanvas calls `getBoundingClientRect()` on every draw and mouse move, which forces a layout if the DOM is dirty.
 - Picking uses the last `mousemove` position. Browser automation must dispatch `mousemove` before `click`
   (see the JS snippets used during testing: `canvas.dispatchEvent(new MouseEvent("mousemove", …))`).
 
@@ -263,8 +275,8 @@ icons only. KiCanvas supports touch pan and pinch natively. The draw catcher use
 
 `GET /api/workspace` · `POST /api/workspace/current {id}` · `GET /api/project` · `GET /api/netlist` · `GET /api/check` · `GET /api/lib` · `GET /api/lib/part?id=` · `GET /api/lib/asset?id=&f=symbol_unitN.svg|footprint.svg|part.glb` · `GET /project/<file>` (raw) · `GET /api/3d.glb` · `GET /api/review` ·
 `POST /api/review/comments` · `PATCH /api/review/comments/:id` `{status?, reply?}` · `POST /api/review/send` `{ids?}` ·
-`DELETE /api/review/comments/:id` · `GET /api/agent` · `GET /api/diff?since=<rev>` · `GET /api/components` · `?klc=1` on `/api/lib*` · `GET /kretsa/<path>` ·
-`WS /ws` → `{type:"reload", rev, changed[]}` | `{type:"review"}` | `{type:"project", id}` | `{type:"lib"}` | `{type:"agent"}`
+`DELETE /api/review/comments/:id` · `GET /api/agent` · `GET /api/theme` · `GET /api/diff?since=<rev>` · `GET /api/components` · `?klc=1` on `/api/lib*` · `GET /kretsa/<path>` ·
+`WS /ws` → `{type:"reload", rev, changed[]}` | `{type:"review"}` | `{type:"project", id}` | `{type:"lib"}` | `{type:"agent"}` | `{type:"theme"}`
 
 ## Roadmap / known gaps
 

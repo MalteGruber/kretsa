@@ -14,6 +14,7 @@ import {
   keepRev, diffSince, setSymbolFields, diffMarkdown, readRev,
   renderPcb, renderSch, renderBoard3d, renderMarkdown, type RenderResult,
   type LibContext,
+  readTheme, initTheme,
 } from "@kretsa/core";
 import type { CheckReport } from "../../shared/check";
 import type { PartDetail } from "../../shared/library";
@@ -65,6 +66,8 @@ Commands:
               --addressed  you handled it (the human then resolves or reopens)
               --wontfix  you won't do it (say why)   --open  keep it open (e.g. you asked a question)
               Without a flag the status stays as it is. Only the human resolves.
+  theme [init]   Where the viewer's color file is (one per user; layer, schematic and highlight
+                 colors) and any problems in it. init writes it with every default to edit (--force)
   help      This text
 
 Options for every command: --project/-p <project> (instead of the [project] argument).
@@ -83,7 +86,7 @@ async function main() {
       around: { type: "string" }, net: { type: "string" }, sheet: { type: "string" }, side: { type: "string" },
       layers: { type: "string" }, size: { type: "string" }, margin: { type: "string" },
       project: { type: "string", short: "p" }, addressed: { type: "boolean" }, wontfix: { type: "boolean" }, open: { type: "boolean" },
-      timeout: { type: "string" }, all: { type: "boolean" }, klc: { type: "boolean" },
+      timeout: { type: "string" }, all: { type: "boolean" }, klc: { type: "boolean" }, force: { type: "boolean" },
     },
   });
 
@@ -95,6 +98,7 @@ async function main() {
     return serve(root, o);
   }
   if (cmd === "projects") return projects(!!o.json);
+  if (cmd === "theme") return theme(positionals[0], o);
   if (cmd === "lib" && o.project) process.env.KRETSA_PROJECT = (await resolveProject(o.project));
   if (cmd === "use") return use(positionals[0]);
   if (cmd === "lib") return lib(positionals, o);
@@ -112,6 +116,20 @@ async function main() {
     case "review": return review(dir, !!o.json);
     default: die(`Unknown command "${cmd}".\n\n${HELP}`);
   }
+}
+
+function theme(sub: string | undefined, o: { force?: boolean; json?: boolean }) {
+  if (sub === "init") {
+    const r = initTheme(!!o.force);
+    console.log(r.written ? `Wrote ${r.path} (every default; edit it, the open viewer updates on save).` : `${r.path} already exists (--force overwrites it).`);
+    return;
+  }
+  if (sub) die(`Usage: kretsa theme [init [--force]]`);
+  const t = readTheme();
+  if (o.json) return void console.log(JSON.stringify(t, null, 2));
+  console.log(`Color file: ${t.path}${t.exists ? "" : " (not created yet: \`kretsa theme init\` writes every default to edit)"}`);
+  console.log(`Override the location with $KRETSA_THEME. The open viewer updates when the file is saved.`);
+  if (t.warnings.length) console.log(`\nProblems (these entries use the default):\n${t.warnings.map((w) => `- ${w}`).join("\n")}`);
 }
 
 /** Which project a command acts on (see HELP). */

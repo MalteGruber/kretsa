@@ -1,6 +1,7 @@
 import type { CheckReport } from "../../shared/check";
 import type { Netlist } from "../../shared/netlist";
 import type { WorkspaceInfo } from "../../shared/workspace";
+import type { ThemeInfo } from "../../shared/theme";
 export interface ServerComponent { ref: string; value: string; footprint: string; lib?: string; layer?: string; props: [string, string][] }
 import type { AgentStatus, Comment, CommentPatch, NewComment, ProjectInfo, Review, ServerMessage } from "../../shared/review";
 
@@ -29,6 +30,7 @@ export const api = {
   send: (ids?: string[]) => req<{ sent: string[] }>("POST", "/api/review/send", ids ? { ids } : {}),
   /** Components parsed server-side from the files (for views without a KiCanvas pane, e.g. 3D only). */
   components: () => req<ServerComponent[]>("GET", "/api/components"),
+  theme: () => req<ThemeInfo>("GET", "/api/theme"),
 };
 
 /** Auto-reconnecting WebSocket to the server's change feed. */

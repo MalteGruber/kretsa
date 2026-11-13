@@ -93,7 +93,8 @@ export type ServerMessage =
   | { type: "review" }
   | { type: "project"; id: string } // the current project of the workspace changed
   | { type: "lib" } // a library file (symbol, footprint, 3D model, lib table) changed
-  | { type: "agent" }; // `kretsa wait` started or stopped
+  | { type: "agent" } // `kretsa wait` started or stopped
+  | { type: "theme" }; // the color preference file changed
 
 export type NewComment = Omit<Comment, "id" | "status" | "design_rev" | "thread" | "created"> & {
   snapshotPng?: string; // data URL, server stores it to snap/<id>.png
