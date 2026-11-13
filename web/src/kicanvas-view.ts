@@ -116,7 +116,7 @@ export class KiCanvasView {
     // "basic" keeps pan/zoom/select; "none" would disable interaction entirely.
     // KiCanvas' own buttons are switched off; its bottom toolbar is hidden after mount.
     this.embed.setAttribute("controls", "basic");
-    this.embed.setAttribute("controlslist", "nodownload nofullscreen noflipview");
+    this.embed.setAttribute("controlslist", "nodownload nofullscreen noflipview nooverlay");
     for (const f of files) {
       const src = document.createElement("kicanvas-source");
       src.setAttribute("src", `/project/${f.path}?h=${f.hash}`);
