@@ -4,6 +4,7 @@ import type { WorkspaceInfo } from "../../shared/workspace";
 import type { ThemeInfo } from "../../shared/theme";
 export interface ServerComponent { ref: string; value: string; footprint: string; lib?: string; layer?: string; props: [string, string][] }
 import type { AgentStatus, Comment, CommentPatch, NewComment, ProjectInfo, Review, ServerMessage } from "../../shared/review";
+export type { AgentStatus };
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const r = await fetch(url, {
@@ -27,7 +28,11 @@ export const api = {
   /** "Send to AI": hand drafts to the agent (all, or `ids`). */
   deleteComment: (id: string) => req<{ deleted: string }>("DELETE", `/api/review/comments/${id}`),
   agent: () => req<AgentStatus>("GET", "/api/agent"),
-  send: (ids?: string[]) => req<{ sent: string[] }>("POST", "/api/review/send", ids ? { ids } : {}),
+  /** started: the server started the configured agent because none was listening. */
+  send: (ids?: string[]) => req<{ sent: string[]; started?: boolean }>("POST", "/api/review/send", ids ? { ids } : {}),
+  agentStart: () => req<AgentStatus>("POST", "/api/agent/start", {}),
+  agentStop: () => req<AgentStatus>("POST", "/api/agent/stop", {}),
+  agentLog: (since = 0) => req<{ from: number; lines: string[] }>("GET", `/api/agent/log?since=${since}`),
   /** Components parsed server-side from the files (for views without a KiCanvas pane, e.g. 3D only). */
   components: () => req<ServerComponent[]>("GET", "/api/components"),
   theme: () => req<ThemeInfo>("GET", "/api/theme"),

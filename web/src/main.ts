@@ -1,6 +1,6 @@
 import { isDraft, type Anchor, type Comment, type InkShape, type ProjectInfo, type Review, type View } from "../../shared/review";
 import { bboxOf, finishShape, inkMarkup, paintInk, type Tool } from "./ink";
-import { api, connect } from "./api";
+import { api, connect, type AgentStatus } from "./api";
 import { itemToAnchor, itemToComponent, KiCanvasView, type Component } from "./kicanvas-view";
 import { NetIndex, type NetSel } from "./nets";
 import type { ThreeView } from "./three-view";
@@ -75,7 +75,9 @@ const state = {
   /** "What changed since this comment": parts drawn as boxes on the canvas. */
   diff: null as { comment: string; data: DesignDiff } | null,
   diffs: new Map<string, DesignDiff | string>(),
-  agent: null as { waiting: boolean; since?: string } | null,
+  agent: null as AgentStatus | null,
+  /** Output of the server-started agent: lines[i] is log line from + i. */
+  agentLog: { from: 0, lines: [] as string[], loaded: false },
 };
 
 // =====================================================================================
@@ -738,7 +740,7 @@ async function submitComment(form: HTMLFormElement, send = true) {
       ...(sel.aspect && { aspect: sel.aspect }),
       ...(sel.aspect === "3d" && { snapshotPng: library.snapshot3d() }),
     });
-    if (send) await api.send();
+    if (send) noteStarted(await api.send());
     form.reset();
     state.draftAnchors = [];
     renderDraftAnchors();
@@ -770,7 +772,7 @@ async function submitComment(form: HTMLFormElement, send = true) {
     ...(shapes.length && { ink_shapes: shapes }),
     snapshotPng: pane?.three?.snapshot() ?? (pane && (shapes.length || point) ? inkSnapshot(pane, shapes, point) : undefined),
   });
-  if (send) await api.send();
+  if (send) noteStarted(await api.send());
   form.reset();
   state.draftAnchors = [];
   state.draftPoint = null;
@@ -867,10 +869,78 @@ async function refreshReview() {
 async function sendDrafts() {
   const r = await api.send();
   await refreshReview();
-  flash(r.sent.length ? `Sent ${r.sent.length} comment${r.sent.length === 1 ? "" : "s"} to the AI` : "Nothing to send");
+  flash(r.sent.length ? `Sent ${r.sent.length} comment${r.sent.length === 1 ? "" : "s"} to the AI${r.started ? " · agent started" : ""}` : "Nothing to send");
 }
 
-/** Short status message at the bottom of the screen. */
+/** After a Send: if the server started the agent for it, say so (the log panel shows what it does). */
+function noteStarted(r: { started?: boolean }) {
+  if (r.started) setTimeout(() => flash("Agent started · click Agent to watch"), 600);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Design agent started from the viewer (`kretsa serve --agent` / .kretsa/config.json)
+// ---------------------------------------------------------------------------------------------
+
+function agentPhase(): "listening" | "working" | "idle" | "off" {
+  const a = state.agent;
+  if (a?.waiting) return "listening";
+  if (a?.run?.running) return "working";
+  return a?.run?.available ? "idle" : "off";
+}
+
+function renderAgent() {
+  const a = state.agent, run = a?.run, phase = agentPhase();
+  const btn = $("#agent-btn");
+  btn.hidden = !run?.available && !run?.running;
+  btn.className = `agentbtn ${phase}`;
+  btn.title = { listening: "The agent is listening: what you send reaches it right away. Click to see its log.",
+    working: "The agent is working. Click to watch.", idle: "The agent isn't running. Click to start it or see the last run.",
+    off: "" }[phase];
+  if ($("#agentlog").hidden) return;
+  const t = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString() : "");
+  $("#agentlog-state").textContent =
+    phase === "listening" ? `listening (kretsa wait)${run?.running ? ` · started ${t(run.started)}` : ""}`
+    : phase === "working" ? `working · started ${t(run!.started)}`
+    : run?.ended ? `not running · last run ended ${t(run.ended)} (exit ${run.exitCode ?? "?"})`
+    : run?.available ? "not running" : "not configured";
+  $<HTMLButtonElement>("#agent-start").hidden = !run?.available || !!run.running || !!a?.waiting;
+  $<HTMLButtonElement>("#agent-stop").hidden = !run?.running;
+  $("#agentlog-foot").innerHTML = run?.available
+    ? `<code>${esc(run.command ?? "")}</code>${run.autoStart ? " · Send to AI starts it when no agent is listening" : ""}`
+    : `Start the viewer with <code>kretsa serve --agent "…"</code> (or set <code>agent</code> in <code>.kretsa/config.json</code>) to start the agent from here. See the help (?).`;
+}
+
+async function openAgentLog() {
+  $("#agentlog").hidden = false;
+  renderAgent();
+  if (!state.agentLog.loaded) {
+    try {
+      const r = await api.agentLog(0);
+      state.agentLog = { from: r.from, lines: r.lines, loaded: true };
+    } catch { state.agentLog.loaded = false; }
+  }
+  const body = $("#agentlog-body");
+  body.textContent = state.agentLog.lines.join("\n");
+  if (!state.agentLog.lines.length) body.textContent = "No output yet.";
+  body.scrollTop = body.scrollHeight;
+}
+function closeAgentLog() { $("#agentlog").hidden = true; }
+
+/** WebSocket: new agent output. Append if contiguous, else reload the buffer on next open. */
+function onAgentLog(from: number, lines: string[]) {
+  const L = state.agentLog;
+  if (!L.loaded) return;
+  if (from !== L.from + L.lines.length) { L.loaded = false; if (!$("#agentlog").hidden) openAgentLog(); return; }
+  L.lines.push(...lines);
+  if (L.lines.length > 3000) { const d = L.lines.length - 3000; L.lines.splice(0, d); L.from += d; }
+  if ($("#agentlog").hidden) return;
+  const body = $("#agentlog-body");
+  const atEnd = body.scrollHeight - body.scrollTop - body.clientHeight < 40;
+  if (body.textContent === "No output yet.") body.textContent = "";
+  body.append((body.textContent ? "\n" : "") + lines.join("\n"));
+  if (atEnd) body.scrollTop = body.scrollHeight;
+}
+
 /** Colors from the user's theme file (`kretsa theme`). live: the file changed while the page is open. */
 async function loadTheme(live: boolean) {
   let info;
@@ -888,6 +958,7 @@ async function loadTheme(live: boolean) {
   }
 }
 
+/** Short status message at the bottom of the screen. */
 function flash(msg: string) {
   const el = $("#flash");
   el.textContent = msg;
@@ -1192,6 +1263,7 @@ function renderStatus() {
 
 function agentBadge(): string {
   if (!state.agent) return "";
+  if (!state.agent.waiting && state.agent.run?.running) return ` · <span class="agent work" data-act="agentlog" title="The agent the viewer started is working. Click to watch.">◐ AI working</span>`;
   return state.agent.waiting
     ? ` · <span class="agent on" title="The agent is running kretsa wait${state.agent.since ? ` since ${esc(new Date(state.agent.since).toLocaleTimeString())}` : ""}: what you send reaches it right away">● AI listening</span>`
     : ` · <span class="agent off" title="No agent is running kretsa wait for this project. Sent comments wait in review.json until it does.">○ AI not listening</span>`;
@@ -1200,6 +1272,7 @@ function agentBadge(): string {
 async function loadAgent() {
   try { state.agent = await api.agent(); } catch { state.agent = null; }
   renderStatus();
+  renderAgent();
 }
 
 function bindUi() {
@@ -1276,7 +1349,7 @@ function bindUi() {
     else if (k === "z") act("zoomsel");
     else if (k === "[") act("left");
     else if (k >= "1" && k <= "5") showMode(MODES[Number(k) - 1]!);
-    else if (k === "escape") { closeProjects(); closeHelp(); setCommentMode(false); setInkTool(null); state.checkMarker = null; state.activeComment = null; state.diff = null; renderComments(); }
+    else if (k === "escape") { closeProjects(); closeHelp(); closeAgentLog(); setCommentMode(false); setInkTool(null); state.checkMarker = null; state.activeComment = null; state.diff = null; renderComments(); }
   });
 }
 
@@ -1363,6 +1436,14 @@ async function boot() {
   $("#project-name").onclick = openProjects;
   $("#projects-close").onclick = closeProjects;
   $("#help-close").onclick = closeHelp;
+  $("#agent-btn").onclick = () => ($("#agentlog").hidden ? openAgentLog() : closeAgentLog());
+  $("#agentlog-close").onclick = closeAgentLog;
+  $("#status").addEventListener("click", (e) => { if ((e.target as HTMLElement).closest(".agent")) openAgentLog(); });
+  $("#agent-start").onclick = async () => {
+    try { state.agent = await api.agentStart(); } catch (e) { flash(String((e as Error).message).replace(/^.*?: \d+ /, "").replace(/^\{"error":"(.*)"\}$/, "$1")); }
+    renderStatus(); renderAgent();
+  };
+  $("#agent-stop").onclick = async () => { try { state.agent = await api.agentStop(); } catch {} renderAgent(); };
   $("#help").addEventListener("click", (e) => { if (e.target === $("#help")) closeHelp(); });
   $("#projects").addEventListener("click", (e) => { if (e.target === $("#projects")) closeProjects(); });
   try { state.project = await api.project(); }
@@ -1387,6 +1468,7 @@ async function boot() {
       if (msg.type === "lib") return void library?.refresh();
       if (msg.type === "agent") return void loadAgent();
       if (msg.type === "theme") return void loadTheme(true);
+      if (msg.type === "agent-log") return void onAgentLog(msg.from, msg.lines);
       if (msg.type !== "reload") return;
       state.project = await api.project();
       renderStatus();

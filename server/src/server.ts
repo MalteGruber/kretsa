@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { watch as watchFs, watchFile, type FSWatcher } from "node:fs";
 import {
   detectKicadCli, exportGlb, exportNetlist, migrateLegacyDir, projectDirOf, readWorkspaceState, ReviewStore, rootSchematic,
-  runChecks, safeJoin, readTheme, themePath, readDesign, keepRev, diffSince, scanProject, workspaceInfo, writeWorkspaceState, libraryInfo, libraryTables, partDetail, partAsset, svgToPng,
+  runChecks, safeJoin, readTheme, themePath, readAgentConfig, AgentRunner, readDesign, keepRev, diffSince, scanProject, workspaceInfo, writeWorkspaceState, libraryInfo, libraryTables, partDetail, partAsset, svgToPng,
   type LibContext,
 } from "@kretsa/core";
 import type { CommentPatch, NewComment, ProjectInfo, SendRequest, ServerMessage } from "../../shared/review";
@@ -20,6 +20,8 @@ export interface ServeOptions {
   host?: string;
   /** Built frontend to serve (default web/dist). */
   webDist?: string;
+  /** Agent command the viewer may start ({prompt}, {project_dir} substituted); else .kretsa/config.json "agent". */
+  agent?: string;
 }
 
 export async function startServer(opts: ServeOptions) {
@@ -189,10 +191,32 @@ export async function startServer(opts: ServeOptions) {
         const body = (await req.json().catch(() => ({}))) as SendRequest;
         const sent = await review.send(body.ids);
         broadcast({ type: "review" });
-        return json({ sent: sent.map((c) => c.id) });
+        // Nobody listening? Start the configured agent (auto_start, default on).
+        let started = false;
+        if (sent.length && body.start !== false) {
+          const cfg = agentConfig();
+          if (cfg && cfg.auto_start !== false && !runner.status(true).running && !(await review.agentWaiting()).waiting) {
+            runner.start(cfg, projectDir, root, `Send to AI (${sent.length} comment${sent.length === 1 ? "" : "s"})`);
+            started = true;
+          }
+        }
+        return json({ sent: sent.map((c) => c.id), started });
       }
 
-      if (path === "/api/agent") return json(await review.agentWaiting());
+      if (path === "/api/agent") return json(await agentStatus());
+      if (path === "/api/agent/log") return json(runner.log(Number(url.searchParams.get("since") ?? 0)));
+      if (path === "/api/agent/start" && req.method === "POST") {
+        let cfg;
+        try { cfg = agentConfig(); } catch (e) { return json({ error: (e as Error).message }, 400); }
+        if (!cfg) return json({ error: "No agent command configured. Start the viewer with kretsa serve --agent \"…\" or add \"agent\" to .kretsa/config.json." }, 400);
+        if ((await review.agentWaiting()).waiting) return json({ error: "An agent is already listening (kretsa wait) for this project." }, 409);
+        runner.start(cfg, projectDir, root, "started from the viewer");
+        return json(await agentStatus());
+      }
+      if (path === "/api/agent/stop" && req.method === "POST") {
+        runner.stop();
+        return json(await agentStatus());
+      }
       if (path === "/api/theme") return json(readTheme());
 
       const m = path.match(/^\/api\/review\/comments\/([\w-]+)$/);
@@ -234,6 +258,19 @@ export async function startServer(opts: ServeOptions) {
 
   function broadcast(msg: ServerMessage) {
     server.publish("all", JSON.stringify(msg));
+  }
+
+  // The design agent the viewer can start (off unless configured). Its output streams to every open page.
+  const agentConfig = () => readAgentConfig(root, opts.agent);
+  const runner = new AgentRunner((ev) => {
+    if (ev.lines) { const total = runner.status(true).lines ?? 0; broadcast({ type: "agent-log", from: total - ev.lines.length, lines: ev.lines }); }
+    if (ev.status) broadcast({ type: "agent" });
+  });
+  process.on("exit", () => runner.kill());
+  async function agentStatus() {
+    let cfg = null;
+    try { cfg = agentConfig(); } catch {}
+    return { ...(await review.agentWaiting()), run: { ...runner.status(!!cfg), autoStart: !!cfg && cfg.auto_start !== false } };
   }
 
   // The color preference file lives outside the workspace (and may not exist yet): poll its stat.
@@ -320,6 +357,10 @@ export async function startServer(opts: ServeOptions) {
   console.log(`  workspace: ${root}`);
   console.log(`  project: ${currentId ?? "(none found)"}`);
   console.log(`  kicad-cli: ${kicadCli ?? "NOT FOUND (3D and checks disabled)"}`);
+  try {
+    const cfg = agentConfig();
+    console.log(`  agent: ${cfg ? `${cfg.command[0]} (the viewer can start it${cfg.auto_start !== false ? "; Send to AI starts it when none is listening" : ""})` : "not configured (--agent or .kretsa/config.json)"}`);
+  } catch (e) { console.log(`  agent: ${(e as Error).message}`); }
 
   return {
     server,

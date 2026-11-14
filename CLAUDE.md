@@ -255,6 +255,13 @@ confirm, no modal). The status bar shows whether an agent is in `kretsa wait` (`
 `.kretsa/agent.json`, the server checks the pid is alive and broadcasts `{type:"agent"}`). The Components search also lists
 matching nets. Draw is disabled in 3D-only mode. PCB layers: long-press on touch toggles visibility.
 
+**Starting the agent** (`core/src/agent-run.ts`, off unless configured): `kretsa serve --agent "CMD"` or `agent` in
+`<workspace>/.kretsa/config.json` (`command` argv with `{prompt}`/`{project_dir}`, `prompt_extra`, `prompt`, `auto_start`, `idle_seconds`).
+The command only ever comes from the server side. `AgentRunner` spawns it in the project dir (own process group, so Stop also
+kills its `kretsa wait`; a `kretsa` shim is put on PATH if none is installed), formats Claude Code `stream-json` into readable
+lines, streams them as `{type:"agent-log"}` and keeps `.kretsa/agent-run.log`. Send to AI starts it when no agent is listening.
+UI: the top-bar Agent button (state dot) and the non-modal log panel (Start/Stop). API: `POST /api/agent/start|stop`, `GET /api/agent/log?since=`.
+
 **Phone** (`max-width: 820px`): side panels become drawers (hamburger and comments button), split stacks vertically, toolbar
 icons only. KiCanvas supports touch pan and pinch natively. The draw catcher uses `touch-action: none`.
 

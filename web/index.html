@@ -25,6 +25,9 @@
       </nav>
       <div class="topright">
         <span id="status" class="status"></span>
+        <button id="agent-btn" class="agentbtn" title="Design agent: start it, watch what it does" hidden>
+          <svg viewBox="0 0 24 24"><rect x="5" y="8" width="14" height="11" rx="2" /><path d="M12 4v4M9 13h.01M15 13h.01M9 16h6" /></svg><i></i><span class="long">Agent</span>
+        </button>
         <button id="send-ai" class="sendbtn" title="Send your draft comments to the AI agent (it is waiting in kretsa wait)" hidden>
           <svg viewBox="0 0 24 24"><path d="M3 11l18-8-8 18-2-8z" /></svg><span class="long">Send to AI</span><b id="send-ai-count"></b>
         </button>
@@ -130,6 +133,15 @@
       </aside>
     </div>
     <div id="flash" class="flash" hidden></div>
+    <aside id="agentlog" class="agentlog" hidden>
+      <div class="overlay-head"><h2>Design agent</h2><span id="agentlog-state" class="muted"></span>
+        <button id="agent-start" class="primary small" type="button">Start</button>
+        <button id="agent-stop" class="danger small" type="button">Stop</button>
+        <button id="agentlog-close" class="iconbtn" title="Close (Esc)">✕</button></div>
+      <pre id="agentlog-body"></pre>
+      <div id="agentlog-foot" class="overlay-foot muted"></div>
+    </aside>
+
     <div id="help" class="overlay" hidden>
       <div class="overlay-box help">
         <div class="overlay-head"><h2>Using kretsa</h2><button id="help-close" class="iconbtn" title="Close (Esc)">✕</button></div>
@@ -141,6 +153,11 @@
             <li>The agent picks them up with <code>kretsa wait</code> (the status bar shows whether it is listening), changes the design
               and replies. Then <b>Resolve</b>, or reply to send it back. <b>What changed?</b> on a comment shows the agent's edits.</li>
           </ol>
+          <h3>Starting the agent from here</h3>
+          <p>If the viewer was started with <code>kretsa serve --agent "…"</code> (or <code>agent</code> in the workspace's
+            <code>.kretsa/config.json</code>), the <b>Agent</b> button starts your design agent and shows its log, and
+            <b>Send to AI</b> starts it when no agent is listening. It works through what you sent, keeps listening for a while,
+            then stops by itself.</p>
           <h3>Library</h3>
           <p>Comment on a part's symbol, footprint or 3D model (the tile's <b>Comment</b> button), click pin and pad rows to point at
             them, or <b>Request a new part</b>. <b>KLC</b> adds KiCad Library Convention checks.</p>

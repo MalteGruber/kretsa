@@ -94,7 +94,8 @@ export type ServerMessage =
   | { type: "project"; id: string } // the current project of the workspace changed
   | { type: "lib" } // a library file (symbol, footprint, 3D model, lib table) changed
   | { type: "agent" } // `kretsa wait` started or stopped
-  | { type: "theme" }; // the color preference file changed
+  | { type: "theme" } // the color preference file changed
+  | { type: "agent-log"; from: number; lines: string[] }; // output of the server-started agent
 
 export type NewComment = Omit<Comment, "id" | "status" | "design_rev" | "thread" | "created"> & {
   snapshotPng?: string; // data URL, server stores it to snap/<id>.png
@@ -108,7 +109,30 @@ export type CommentPatch = {
 };
 
 /** Is an agent blocked in `kretsa wait` for this project right now? (GET /api/agent) */
-export interface AgentStatus { waiting: boolean; since?: string }
+export interface AgentStatus {
+  /** An agent is blocked in `kretsa wait` for this project (started by anyone). */
+  waiting: boolean;
+  since?: string;
+  /** The agent process the viewer can start (`kretsa serve --agent` / .kretsa/config.json). */
+  run?: AgentRun;
+}
+
+/** GET /api/agent `run`: the server-started agent process. */
+export interface AgentRun {
+  /** An agent command is configured (else the viewer can't start one). */
+  available: boolean;
+  running: boolean;
+  pid?: number;
+  started?: string;
+  ended?: string;
+  exitCode?: number | null;
+  /** The command, with the prompt elided. */
+  command?: string;
+  /** Total log lines so far (GET /api/agent/log?since=N). */
+  lines?: number;
+  /** Send to AI starts the agent when none is listening. */
+  autoStart?: boolean;
+}
 
 /** Body of POST /api/review/send: send these drafts (default: all drafts). */
-export type SendRequest = { ids?: string[] };
+export type SendRequest = { ids?: string[]; /** false: don't start the agent even if auto_start is on */ start?: boolean };

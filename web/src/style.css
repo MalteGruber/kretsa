@@ -388,8 +388,32 @@ button.crumb:hover { color: var(--accent-fg); text-decoration: underline; }
 body.libmode #left, body.libmode #toggle-left { display: none; }
 
 /* ---------- send to AI ---------- */
+.agent { cursor: pointer; }
 .agent.on { color: var(--resolved); }
 .agent.off { color: var(--muted); }
+.agent.work { color: var(--open); }
+
+/* Design agent: top-bar button (state dot) and the log panel (non-modal, so you can keep reviewing). */
+.agentbtn { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: none; color: var(--fg); font-size: 12px; }
+.agentbtn:hover { background: var(--panel-2); }
+.agentbtn[hidden] { display: none; }
+.agentbtn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.agentbtn i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.agentbtn.listening i { background: var(--resolved); }
+.agentbtn.working i { background: var(--open); animation: kretsa-breathe 1.2s ease-in-out infinite; }
+.agentlog { position: fixed; right: 12px; bottom: 12px; z-index: 40; width: min(620px, calc(100vw - 24px)); height: min(52vh, 520px);
+  display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border-strong); border-radius: 6px; box-shadow: var(--shadow-lg); }
+.agentlog[hidden] { display: none; }
+.agentlog .overlay-head { padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.agentlog button.small { padding: 3px 10px; font-size: 12px; }
+.agentlog button.danger { background: none; border: 1px solid #f8514966; color: var(--error); border-radius: 6px; }
+.agentlog button[hidden] { display: none; }
+#agentlog-body { flex: 1; margin: 0; padding: 8px 12px; overflow: auto; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--fg); white-space: pre-wrap; word-break: break-word; }
+#agentlog-foot code { font-size: 11px; word-break: break-all; }
+@media (max-width: 820px) {
+  .agentbtn { height: 36px; } .agentbtn .long { display: none; }
+  .agentlog { right: 0; bottom: 0; width: 100vw; height: 60vh; border-radius: 8px 8px 0 0; }
+}
 .toolbar button:disabled { opacity: 0.35; cursor: not-allowed; }
 .cactions button.danger { color: var(--error); border-color: #f8514966; }
 .editbox textarea { flex: 1; border: 1px solid var(--border); border-radius: 2px; padding: 6px 8px; font: inherit; background: var(--input); color: var(--fg); }

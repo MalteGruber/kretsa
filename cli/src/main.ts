@@ -34,6 +34,9 @@ Commands:
   serve [dir]    Start the web viewer for a workspace or project dir (default: cwd)
                    http://<host>:7777, LAN-reachable. --port N  --host ADDR
                    --dev  Vite + HMR on :5177 (frontend work)
+                   --agent "CMD"  let the viewer start your design agent (Start button, and Send to AI
+                     when none is listening). {prompt} = kretsa's agent prompt, {project_dir}. Or set
+                     "agent" in <workspace>/.kretsa/config.json; see docs/review-format.md
   projects       List the workspace's projects; * marks the current one
   use <project>  Make <project> current, for later commands and in the open viewer
   check     Run ERC (schematic) + DRC with schematic parity (PCB); prints what is new/fixed
@@ -86,7 +89,7 @@ async function main() {
       around: { type: "string" }, net: { type: "string" }, sheet: { type: "string" }, side: { type: "string" },
       layers: { type: "string" }, size: { type: "string" }, margin: { type: "string" },
       project: { type: "string", short: "p" }, addressed: { type: "boolean" }, wontfix: { type: "boolean" }, open: { type: "boolean" },
-      timeout: { type: "string" }, all: { type: "boolean" }, klc: { type: "boolean" }, force: { type: "boolean" },
+      timeout: { type: "string" }, all: { type: "boolean" }, klc: { type: "boolean" }, force: { type: "boolean" }, agent: { type: "string" },
     },
   });
 
@@ -260,7 +263,7 @@ function die(msg: string): never {
 
 // ---------------------------------------------------------------------------------------------
 
-async function serve(root: string, o: { port?: string; host?: string; dev?: boolean }) {
+async function serve(root: string, o: { port?: string; host?: string; dev?: boolean; agent?: string }) {
   const port = Number(o.port ?? process.env.KRETSA_PORT ?? 7777);
   const host = o.host ?? process.env.KRETSA_HOST ?? "0.0.0.0";
   const web = join(ROOT, "web");
@@ -270,7 +273,7 @@ async function serve(root: string, o: { port?: string; host?: string; dev?: bool
     if (b.exitCode !== 0) die("Frontend build failed.");
   }
   const { startServer } = await import("@kretsa/server");
-  await startServer({ root, port, host });
+  await startServer({ root, port, host, agent: o.agent ?? process.env.KRETSA_AGENT });
   if (o.dev) {
     const vite = [join(web, "node_modules/.bin/vite"), join(ROOT, "node_modules/.bin/vite")].find(existsSync);
     if (!vite) die("vite not found; run `bun install`.");

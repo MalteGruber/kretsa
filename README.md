@@ -177,6 +177,19 @@ folder and add something like this to its `CLAUDE.md` / `AGENTS.md`:
 
 Your own conventions (field sets, KLC deviations, fab rules) also belong in that file. kretsa itself stays generic.
 
+### Starting the agent from the viewer
+
+Start the viewer with your agent's command and the browser gets an **Agent** button (start, stop, live log), and
+**Send to AI** starts the agent when none is listening. kretsa supplies the prompt (`{prompt}`); it works through what you
+sent, keeps listening for 15 minutes, then exits.
+
+```sh
+kretsa serve ~/hardware --agent 'claude -p {prompt} --continue --output-format stream-json --verbose --permission-mode acceptEdits --allowedTools "Bash(kretsa:*)" "Bash(kicad-cli:*)"'
+```
+
+Or put it in `<workspace>/.kretsa/config.json` as `{"agent": {"command": [...], "prompt_extra": "your own instructions"}}`,
+which stays in your workspace. There is no auth: anyone who can open the viewer can start the agent.
+
 ## CLI
 
 | Command | What it does |
