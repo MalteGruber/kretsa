@@ -1,6 +1,6 @@
 // The review contract between the human (via the web UI) and the AI agent.
 // Persisted as <project>/.kretsa/review.json. Keep changes backwards compatible; bump `version` otherwise.
-// Spec + agent instructions: docs/review-format.md
+// Agent instructions: docs/agent-guide.md (`kretsa guide`)
 
 export type View = "sch" | "pcb" | "3d";
 export type Status = "open" | "addressed" | "resolved" | "wontfix";

@@ -13,29 +13,15 @@ const ROOT = resolve(import.meta.dir, "../..");
 export const DEFAULT_AGENT_PROMPT = `You are the PCB design agent for the KiCad project at {project_dir}. A human reviews your work in
 the kretsa viewer and sends you comments with "Send to AI". You talk to them only through kretsa.
 
-Before you start, read the CLAUDE.md files in this workspace (house style, part standards, tooling)
-and {review_doc} if you haven't yet.
+First run \`kretsa guide\`: it explains the review loop, every command, the comment format and the rules, and shows what
+is waiting for you. Read the workspace's CLAUDE.md / AGENTS.md too: the human's conventions win.
 
-Loop:
-1. Run \`kretsa wait --timeout {idle_seconds}\`. It returns the comments the human sent (immediately if
-   some are waiting). If it times out (exit 3), stop: the human can start you again from the viewer.
-2. For each comment: read the text, anchors (refs, nets, pins, areas) and the snapshot/ink image if
-   there is one. Use \`kretsa render\` / \`kretsa diff\` to see the area if needed.
-3. Make the change in the KiCad files. Prefer small, targeted edits; keep the files loadable by KiCad.
-4. Verify: \`kretsa check\` (no NEW errors you caused), and \`kretsa render\` of what you changed.
-   Look at the image.
-5. Answer every comment: \`kretsa reply <#> "what you changed and how you verified it" --addressed\`.
-   If you can't or shouldn't do it, \`--wontfix\` with the reason. If you need a decision, ask in a
-   reply with \`--open\` and move on to the next comment. Never resolve comments; the human does.
-6. Go back to 1.
-
-Rules:
-- Only touch files inside {project_dir} and the libraries its lib tables point to.
-- Don't commit, push, publish, or upload anything, and don't contact any outside service unless the
-  human asked for it in a comment.
-- If something is ambiguous or risky (removing parts, changing the board outline, replacing a part
-  with a different footprint), ask with \`--open\` instead of guessing.
-- Keep replies short and concrete: refs, nets, values, before -> after.`;
+You were started from the viewer, so nobody is at a terminal:
+- Work through what \`kretsa wait --timeout {idle_seconds}\` returns (it returns right away if comments are waiting).
+  When it times out (exit 3), stop; the human can start you again from the viewer.
+- Run \`kretsa wait\` in the foreground, not in the background, with a command timeout of 10 minutes.
+- When you need a decision, ask in the thread with \`kretsa reply <#> "question" --open\` and continue with the next comment.
+- Don't commit, push, publish or upload anything unless a comment asks for it.`;
 
 export interface AgentConfig {
   /** argv; {prompt} and {project_dir} are substituted. */
@@ -46,7 +32,8 @@ export interface AgentConfig {
   prompt?: string;
   /** Send to AI starts the agent when none is listening (default true). */
   auto_start?: boolean;
-  /** How long the agent keeps listening after its last comment before it exits (default 900 s). */
+  /** How long the agent keeps listening after its last comment before it exits (default and max 540 s: one
+   *  foreground command in Claude Code may run at most 10 minutes). */
   idle_seconds?: number;
 }
 
@@ -87,8 +74,7 @@ export function agentPrompt(cfg: AgentConfig, projectDir: string): string {
   const text = cfg.prompt_extra ? `${base}\n\nAlso:\n${cfg.prompt_extra}` : base;
   return text
     .replaceAll("{project_dir}", projectDir)
-    .replaceAll("{review_doc}", join(ROOT, "docs", "review-format.md"))
-    .replaceAll("{idle_seconds}", String(cfg.idle_seconds ?? 900));
+    .replaceAll("{idle_seconds}", String(Math.max(30, Math.min(cfg.idle_seconds ?? 540, 540))));
 }
 
 /** A `kretsa` on PATH for the agent: the real one if installed, else a shim running this checkout's CLI. */

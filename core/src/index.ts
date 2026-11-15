@@ -17,3 +17,4 @@ export * from "./klc";
 export * from "./lib-edit";
 export * from "./theme";
 export * from "./agent-run";
+export * from "./guide";

@@ -14,7 +14,7 @@ import {
   keepRev, diffSince, setSymbolFields, diffMarkdown, readRev,
   renderPcb, renderSch, renderBoard3d, renderMarkdown, type RenderResult,
   type LibContext,
-  readTheme, initTheme,
+  readTheme, initTheme, agentGuide,
 } from "@kretsa/core";
 import type { CheckReport } from "../../shared/check";
 import type { PartDetail } from "../../shared/library";
@@ -25,18 +25,22 @@ const HELP = `kretsa: KiCad design review between you (web viewer) and an AI age
 
 Usage: kretsa <command> [project] [options]
 
+AI agents: start with \`kretsa guide\` (how the review loop works, every command, the current state).
+
 A workspace is any folder with KiCad projects in it (or a single project folder). The project a
 command acts on is, in order: the [project] argument (a path, or a name/id from \`kretsa projects\`),
 $KRETSA_PROJECT, the project you are inside (cwd or a parent has a .kicad_pro), else the workspace's
 current project, which is shared with the web viewer.
 
 Commands:
+  guide          For the AI agent: the review loop, all commands, comment format, rules, and the
+                 workspace's current state (project, comments waiting, last check). Run it first.
   serve [dir]    Start the web viewer for a workspace or project dir (default: cwd)
                    http://<host>:7777, LAN-reachable. --port N  --host ADDR
                    --dev  Vite + HMR on :5177 (frontend work)
                    --agent "CMD"  let the viewer start your design agent (Start button, and Send to AI
                      when none is listening). {prompt} = kretsa's agent prompt, {project_dir}. Or set
-                     "agent" in <workspace>/.kretsa/config.json; see docs/review-format.md
+                     "agent" in <workspace>/.kretsa/config.json
   projects       List the workspace's projects; * marks the current one
   use <project>  Make <project> current, for later commands and in the open viewer
   check     Run ERC (schematic) + DRC with schematic parity (PCB); prints what is new/fixed
@@ -101,6 +105,7 @@ async function main() {
     return serve(root, o);
   }
   if (cmd === "projects") return projects(!!o.json);
+  if (cmd === "guide") return guide(o.project ?? positionals[0]);
   if (cmd === "theme") return theme(positionals[0], o);
   if (cmd === "lib" && o.project) process.env.KRETSA_PROJECT = (await resolveProject(o.project));
   if (cmd === "use") return use(positionals[0]);
@@ -325,6 +330,50 @@ async function render(dir: string, kind: string | undefined, o: {
   } catch (e) { die(String((e as Error).message)); }
   const what = [kind, o.around && `around ${o.around}`, o.net && `net ${o.net}`, o.sheet && `sheet ${o.sheet}`, o.side].filter(Boolean).join(" · ");
   process.stdout.write(o.json ? JSON.stringify(results, null, 1) + "\n" : renderMarkdown(results, what));
+}
+
+/** The agent guide, then where things stand right now. */
+async function guide(projectArg?: string) {
+  const out = [agentGuide().trimEnd(), "", "---", "", "## Right now", ""];
+  const info = await workspaceInfo(await workspaceRoot());
+  out.push(`Workspace: ${info.root} (${info.projects.length} project${info.projects.length === 1 ? "" : "s"}${info.projects.length > 1 ? "; `kretsa projects` lists them" : ""})`);
+  let dir: string | null = null;
+  try { dir = await resolveProjectQuiet(projectArg); } catch {}
+  if (!dir) {
+    out.push("No current project. Pass one (`-p <project>`), cd into one, or `kretsa use <project>`.", "");
+    return void process.stdout.write(out.join("\n") + "\n");
+  }
+  const store = new ReviewStore(dir);
+  const r = await store.load();
+  const st = await store.agentState();
+  const waiting = await store.sentSince(st.seen);
+  const drafts = r.comments.filter((c) => c.status === "open" && !c.sent).length;
+  const kicad = await detectKicadCli();
+  const p = await scanProject(dir, kicad);
+  const cached = await readFile(join(dir, ".kretsa", "check", `${p.rev}.v${REPORT_VERSION}.json`), "utf8").then((s) => JSON.parse(s) as CheckReport, () => null);
+  const real = cached?.violations.filter((v) => !v.library) ?? [];
+  const n = (s: string) => r.comments.filter((c) => c.status === s).length;
+  out.push(
+    `Project: ${p.name} (${dir}) · rev ${p.rev.slice(0, 12)}`,
+    `Files: schematic ${rootSchematic(p) ?? "none"}, PCB ${mainPcb(p) ?? "none"} · kicad-cli ${kicad ?? "NOT FOUND (checks and renders unavailable)"}`,
+    `Comments: ${waiting.length ? `**${waiting.length} sent and waiting for you** (\`kretsa wait\` returns them now)` : "none waiting for you"} · ${n("open")} open (${drafts} draft${drafts === 1 ? "" : "s"} the human hasn't sent) · ${n("addressed")} addressed, awaiting the human`,
+    cached
+      ? `Check (this rev): ${real.filter((v) => v.severity === "error").length} errors, ${real.filter((v) => v.severity === "warning").length} warnings (\`kretsa check\` for details)`
+      : "Check: not run for this revision yet (`kretsa check`)",
+    `Agent: ${st.waiting ? `a \`kretsa wait\` is already running (pid ${st.waiting.pid}); don't start a second one` : "nobody is in `kretsa wait` right now"}`,
+    "",
+    "Next: read the workspace CLAUDE.md / AGENTS.md if you haven't, then start `kretsa wait` in the background.",
+    "",
+  );
+  process.stdout.write(out.join("\n"));
+}
+
+async function resolveProjectQuiet(ref?: string): Promise<string | null> {
+  if (ref || process.env.KRETSA_PROJECT) return resolveProject(ref);
+  const inside = await findProjectDir();
+  if (inside) return inside;
+  const info = await workspaceInfo(await workspaceRoot());
+  return info.current ? projectDirOf(info.root, info.current) : null;
 }
 
 async function status(dir: string) {

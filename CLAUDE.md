@@ -30,7 +30,7 @@ kretsa/
   server/   @kretsa/server: thin HTTP + WebSocket layer over core, exists only for the web UI (startServer())
   web/      Vite + TS frontend: Schematic | PCB | 3D, comments, drawing, checks
   vendor/   kicanvas (git submodule). Do not edit in place without noting it here
-  docs/     review-format spec (agent instructions)
+  docs/     agent-guide.md (what `kretsa guide` prints: loop, commands, comment format, rules)
 ```
 
 - **Rule:** logic lives in `core/`. The CLI and the server are thin wrappers so they always give the same answers.
@@ -141,6 +141,7 @@ kretsa status | review [project]    # summary / open comments as markdown
 kretsa wait | reply <#> "…" --addressed   # the agent's side of Send to AI
 kretsa diff [since] | render sch|pcb|3d [--around U3] [--net X]   # what changed / images to look at
 kretsa lib check [--klc] | lib set <part> F=V                     # part lint / safe field edits
+kretsa guide                        # the agent's entry point: loop, commands, comment format, current state
 kretsa lib [query] | lib show <part> | lib fp <Lib:Name>   # parts, detail + renders (PNG) for the agent
 kretsa theme [init]                 # the user's color file (~/.config/kretsa/theme.json): layers, schematic, highlight
 bun run typecheck
@@ -200,7 +201,8 @@ pad nets and routing (`kretsa diff`, `GET /api/diff?since=`).
 - `web/src/main.ts`: app state, panes, selection and cross-probing, comments, drawing, checks tab.
   `kicanvas-view.ts` wraps KiCanvas (picking, nets, camera, capture). `nets.ts` holds schematic connectivity. `ink.ts` holds drawing.
   `kicad-theme.ts` holds canvas colors. `three-view.ts` is the GLB viewer (lazy-loaded).
-- `docs/review-format.md`: instructions for the AI agent on consuming and updating review.json.
+- `docs/agent-guide.md`: the agent's guide, printed by `kretsa guide` (`core/src/guide.ts`) followed by the live state
+  (project, comments waiting, last check, whether a `kretsa wait` runs). Keep it in sync when commands change.
 - `fixtures/stickhub/` (USB hub, local 3D models, about 90 parts) and `fixtures/pic_programmer/` (hierarchical
   sheets): KiCad's own demo projects, from `share/kicad/demos` or gitlab kicad/code/kicad `demos/`.
 

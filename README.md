@@ -164,10 +164,11 @@ folder and add something like this to its `CLAUDE.md` / `AGENTS.md`:
 
 ```markdown
 ## Design review (kretsa)
-- The human reviews this design in kretsa. Keep `kretsa wait` running in the background: it returns
-  when they press "Send to AI" and prints their comments (anchors, drawings, snapshot PNGs: look at them).
-  Handle each one, then `kretsa reply <#> "what you did" --addressed`, and start `kretsa wait` again.
-  Never resolve comments. Details: docs/review-format.md in the kretsa repo.
+- The human reviews this design in kretsa. Run `kretsa guide` at the start of a session: it explains the
+  review loop, every command and the comment format, and shows what is waiting for you.
+- Keep `kretsa wait` running in the background: it returns when they press "Send to AI" and prints their
+  comments (anchors, drawings, snapshot PNGs: look at them). Handle each one, then
+  `kretsa reply <#> "what you did" --addressed`, and start `kretsa wait` again. Never resolve comments.
 - Run `kretsa check` before and after every change. Don't leave NEW violations behind. Look at your
   work with `kretsa render` and `kretsa diff`.
 - Make every part yourself in the project libraries. Inspect each one with `kretsa lib show <part>`
@@ -181,7 +182,7 @@ Your own conventions (field sets, KLC deviations, fab rules) also belong in that
 
 Start the viewer with your agent's command and the browser gets an **Agent** button (start, stop, live log), and
 **Send to AI** starts the agent when none is listening. kretsa supplies the prompt (`{prompt}`); it works through what you
-sent, keeps listening for 15 minutes, then exits.
+sent, keeps listening for 9 minutes, then exits.
 
 ```sh
 kretsa serve ~/hardware --agent 'claude -p {prompt} --continue --output-format stream-json --verbose --permission-mode acceptEdits --allowedTools "Bash(kretsa:*)" "Bash(kicad-cli:*)"'
@@ -194,6 +195,7 @@ which stays in your workspace. There is no auth: anyone who can open the viewer 
 
 | Command | What it does |
 |---|---|
+| `kretsa guide` | For the agent: the review loop, every command, comment format, rules, and what is waiting now |
 | `kretsa serve [dir]` | Web viewer for a workspace or project folder (`--port`, `--host`, `--dev`) |
 | `kretsa projects` / `kretsa use <project>` | List projects / switch the shared current project |
 | `kretsa wait` | Block until the human sends comments, print them, exit (`--timeout`, `--all`) |
